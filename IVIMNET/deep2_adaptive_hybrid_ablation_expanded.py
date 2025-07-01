@@ -773,6 +773,22 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     ablate_option = ablate_option
     grad_log_list = []
 
+    # Pad scaling:
+    # Define schedule: (phase, pad_fraction)
+    if original_mode:
+        padding_schedule = {
+        1: 0.3,   # Phase 1
+        2: 0.3,  # Phase 2
+        3: 0.3   # Phase 3
+        }
+    else:
+        padding_schedule = {
+            1: 0.5,   # Phase 1
+            2: 0.3,  # Phase 2
+            3: 0.25   # Phase 3
+        }
+
+
     if use_three_compartment:
         param_tags = {
         'encoder0': 'Dmv',
@@ -792,6 +808,12 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
     ########################################################################################################################################
     ### FUNCTION FOR PHASE AND WEIGHT TUNING ###
+
+    def update_clipping_constraints(self, new_net_pars):
+        self.net_pars.cons_min = torch.tensor(new_net_pars.cons_min, dtype=torch.float32, device=self.device)
+        self.net_pars.cons_max = torch.tensor(new_net_pars.cons_max, dtype=torch.float32, device=self.device)
+        print(f"[MODEL] Clipping constraints updated to: {new_net_pars.profile}")
+
 
     def freeze_encoder_by_phase(net, phase):
         """
@@ -1069,10 +1091,19 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                                 arg.train_pars.patience = 3
                                 set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
 
+                                #Update padfrac
+                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
+                                net.update_clipping_constraints(new_pars)
+                                print(f"Constraint padding updated to {pad_frac}")
+                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+
+
                             elif fine_tune_phase == 2:
-                                if not use_three_compartment:
-                                    print("[SKIP] Phase 3 skipped for 2C model.")
-                                    break
+                                #if not use_three_compartment:
+                                #    print("[SKIP] Phase 3 skipped for 2C model.")
+                                #    break
 
                                 print("[PHASE 3] Tuning Dmv...")
 
@@ -1082,6 +1113,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                                 num_bad_epochs = 0
                                 arg.train_pars.patience = 3
                                 set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
+
+                                #Update padfrac
+                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
+                                net.update_clipping_constraints(new_pars)
+                                print(f"Constraint padding updated to {pad_frac}")
+                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
 
 
                             elif fine_tune_phase == 3:
@@ -1322,10 +1361,19 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                                 arg.train_pars.patience = 3
                                 set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
 
+                                #Update padfrac
+                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
+                                net.update_clipping_constraints(new_pars)
+                                print(f"Constraint padding updated to {pad_frac}")
+                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+
+
                             elif fine_tune_phase == 2:
-                                if not use_three_compartment:
-                                    print("[SKIP] Phase 3 skipped for 2C model.")
-                                    break
+                                #if not use_three_compartment:
+                                #    print("[SKIP] Phase 3 skipped for 2C model.")
+                                #    break
 
                                 print("[PHASE 3] Tuning Dmv...")
                                 net.load_state_dict(final_model, strict=False)
@@ -1334,6 +1382,15 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                                 num_bad_epochs = 0
                                 arg.train_pars.patience = 3
                                 set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
+
+                                #Update padfrac
+                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
+                                net.update_clipping_constraints(new_pars)
+                                print(f"Constraint padding updated to {pad_frac}")
+                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+
 
                             elif fine_tune_phase == 3:
                                 print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")

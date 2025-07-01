@@ -39,7 +39,7 @@ class train_pars:
 
 
 class net_pars:
-    def __init__(self, profile):
+    def __init__(self, profile, pad_fraction=None):
         parts = profile.split("_")
         model_type = parts[0]  # 'brain3' or 'brain2'
         tissue_type = parts[1] if len(parts) > 1 else "mixed"
@@ -109,17 +109,14 @@ class net_pars:
             raise ValueError(f"[net_pars] Unknown model_type: {model_type}")
 
         # Padded constraints
-        if tissue_type in ["mixed", "original"]:
-            pad_fraction = 0.3
-        else:
-            pad_fraction = 0.25
+        if pad_fraction is None:
+            pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
 
+        # Apply padding
         range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
-        boundsrange_min = range_pad
-        boundsrange_max = range_pad
+        self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
+        self.cons_max = np.array(self.cons_max) + range_pad
 
-        self.cons_min = np.clip(np.array(self.cons_min) - boundsrange_min, a_min=0, a_max=None)
-        self.cons_max = np.array(self.cons_max) + boundsrange_max
 
 
 
