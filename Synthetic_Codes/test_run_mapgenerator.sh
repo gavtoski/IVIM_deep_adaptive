@@ -3,10 +3,11 @@
 # === Inputs ===
 MODEL_TYPE="$1"
 NOISE="${2:-nonoise}"  # Default to 'nonoise' if not provided
+TISSUE_FILTER="$3"     # Optional third argument to filter a specific tissue
 
 if [[ "$MODEL_TYPE" != "2C" && "$MODEL_TYPE" != "3C" ]]; then
-  echo "[USAGE] $0 <MODEL_TYPE> [NOISE_MODE]"
-  echo "Example: $0 2C lownoise"
+  echo "[USAGE] $0 <MODEL_TYPE> [NOISE_MODE] [TISSUE_TYPE]"
+  echo "Example: $0 2C lownoise WMH"
   exit 1
 fi
 
@@ -28,8 +29,6 @@ declare -a SUBJECTS=("S1_signal" "NAWM_signal" "WMH_signal")
 
 # === Loop over tissue types ===
 for SUBJECT in "${SUBJECTS[@]}"; do
-  PREPROC="/scratch/nhoang2/IVIM_NeuroCovid/Data/Synth_Data_May2025_${MODEL_TYPE}_seed${SEED}_${NOISE}/${SUBJECT}.npy"
-
   # Determine tissue_type from SUBJECT name
   if [[ "$SUBJECT" == "WMH_signal" ]]; then
     tissue_type="WMH"
@@ -38,6 +37,13 @@ for SUBJECT in "${SUBJECTS[@]}"; do
   else
     tissue_type="mixed"
   fi
+
+  # Skip if tissue filter is specified and doesn't match
+  if [[ -n "$TISSUE_FILTER" && "$tissue_type" != "$TISSUE_FILTER" ]]; then
+    continue
+  fi
+
+  PREPROC="/scratch/nhoang2/IVIM_NeuroCovid/Data/Synth_Data_May2025_${MODEL_TYPE}_seed${SEED}_${NOISE}/${SUBJECT}.npy"
 
   # === Run Adaptive Mode (OriginalOFF, TuneON, FreezeON, BoostOFF, Ablation=None) ===
   if [[ "$MODEL_TYPE" == "3C" ]]; then

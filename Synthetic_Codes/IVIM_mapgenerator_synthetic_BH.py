@@ -469,25 +469,24 @@ if __name__ == "__main__":
     model_type = "3C" if args.use_three_compartment else "2C"
     tissue_type = "mixed" if args.original_mode else args.tissue_type
 
-    print('\n Loading net_pars...\n')
+    print('\n[INFO] Loading hyperparams with model/tissue...\n')
 
-    # Load hyperparameters using updated net_pars logic
-    arg = hp(model_type=model_type, tissue_type=tissue_type, IR=args.IR)
+    # Load full hyperparameter object
+    arg = hyperparams(model_type=model_type, tissue_type=tissue_type, IR=args.IR)
 
-    # Set additional flags before validation
+    # Set any training-specific flags
     arg.use_three_compartment = args.use_three_compartment
-    arg.tissue_type = args.tissue_type
-    arg.model_type = model_type
 
-    arg = deep2.checkarg(arg)  # Auto-fill missing args
+    # Fill missing or derived fields
+    arg = deep2.checkarg(arg)
 
-    # Set training directory
+    # Assign destination directory for training outputs
     arg.train_pars.dest_dir = args.dest_dir
 
     print(vars(arg.train_pars))
     print(f"[CONFIG] Using model_type: {model_type}, tissue_type: {tissue_type}, IR: {args.IR}")
 
-    # Run the map generator
+    # Run IVIM prediction
     IVIM_object = map_generator_NN(
         input_path=args.preproc_loc,
         bvalues_path=args.bval_path,
@@ -507,6 +506,7 @@ if __name__ == "__main__":
 
     IVIM_object.predict_IVIM()
     plt.close('all')
+
 
 
 

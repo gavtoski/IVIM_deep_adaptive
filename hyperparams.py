@@ -132,19 +132,14 @@ class rel_times:
         self.inversiontime = 2230 # ms
         
 class hyperparams:
-    def __init__(self, profile='brain3_mixed'):
-        self.save_name = profile
-        self.fig = False
+    def __init__(self, model_type="3C", tissue_type="mixed", IR=False):
+        self.model_type = model_type
+        self.tissue_type = tissue_type
+        self.use_three_compartment = model_type == "3C"
 
-        # Extract tissue + model info from profile string
-        parts = profile.split("_")
-        model_type = parts[0]         # 'brain3' or 'brain2'
-        tissue_type = parts[1] if len(parts) > 1 else 'mixed'
-        use_three_compartment = model_type == 'brain3'
-
-        # Now fully initialize components
-        self.net_pars = net_pars(profile=profile)
-        self.train_pars = train_pars(profile)
+        self.net_pars = net_pars(model_type=model_type, tissue_type=tissue_type, IR=IR)
+        self.train_pars = train_pars(model_type + "_" + tissue_type)
         self.fit = lsqfit()
         self.sim = sim()
         self.rel_times = rel_times()
+
