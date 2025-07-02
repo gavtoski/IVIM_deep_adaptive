@@ -39,71 +39,50 @@ class train_pars:
 
 
 class net_pars:
-    def __init__(self, profile, pad_fraction=None):
-        parts = profile.split("_")
-        model_type = parts[0]  # 'brain3' or 'brain2'
-        tissue_type = parts[1] if len(parts) > 1 else "mixed"
-        
-        self.profile = profile
-        self.tissue_type = tissue_type# Parse profile
-        
+    def __init__(self, model_type="3C", tissue_type="mixed", pad_fraction=None, IR=False):
+        self.model_type = model_type
+        self.tissue_type = tissue_type
 
-        # Architecture settings 
+        # Architecture settings
         self.dropout = 0.1
         self.batch_norm = True
         self.parallel = True
         self.con = 'sigmoidabs'
         self.fitS0 = True
-        self.IR = False
+        self.IR = IR
         self.depth = 2
         self.width = 0
 
-        # Constraint bounds based on model type 
-        if model_type == "brain3":
-            self.model_type = "3C"
-            
+        if model_type == "3C":
+            self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
             if tissue_type == "mixed":
                 self.cons_min = [0.0001, 0.0,   0.000, 0.0,   0.004, 0.9]
-                self.cons_max = [0.0022, 0.50,  0.005, 0.50,  0.25,  1.1]  
-            
+                self.cons_max = [0.0022, 0.50,  0.005, 0.50,  0.25,  1.1]
             elif tissue_type == "NAWM":
                 self.cons_min = [0.0003, 0.00,  0.000, 0.004, 0.001, 0.9]
                 self.cons_max = [0.0009, 0.15,  0.005, 0.015, 0.15,  1.1]
-            
             elif tissue_type == "WMH":
                 self.cons_min = [0.0003, 0.01,  0.001, 0.004, 0.001, 0.9]
-                self.cons_max = [0.00105, 0.30, 0.005, 0.025, 0.15,  1.1]  
-            
-            elif tissue_type == "original":  # original limit set by the ref paper
+                self.cons_max = [0.00105, 0.30, 0.005, 0.025, 0.15,  1.1]
+            elif tissue_type == "original":
                 self.cons_min = [0.0001, 0.0,   0.000, 0.0,   0.004, 0.9]
                 self.cons_max = [0.0015, 0.40,  0.004, 0.2,   0.2,   1.1]
-            
             else:
                 raise ValueError(f"[net_pars] Unknown 3C tissue type: {tissue_type}")
-            
-            self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
 
-
-        elif model_type == "brain2":
-            self.model_type = "2C"
-
+        elif model_type == "2C":
+            self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
             if tissue_type == "NAWM":
                 self.cons_min = [0.0001, 0.002, 0.005, 0.9]
                 self.cons_max = [0.00080, 0.075, 0.030, 1.1]
-
             elif tissue_type == "WMH":
                 self.cons_min = [0.0001, 0.002, 0.005, 0.9]
-                self.cons_max = [0.00080, 0.125, 0.020,  1.1] #'Dpar', 'Fmv', 'Dmv', 'S0'
-
+                self.cons_max = [0.00080, 0.125, 0.020, 1.1]
             elif tissue_type == "mixed":
                 self.cons_min = [0.0001, 0.002, 0.005, 0.9]
-                self.cons_max = [0.00090, 0.125, 0.030,  1.1]
-
+                self.cons_max = [0.00090, 0.125, 0.030, 1.1]
             else:
                 raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
-
-            self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
-
 
         else:
             raise ValueError(f"[net_pars] Unknown model_type: {model_type}")
@@ -112,20 +91,9 @@ class net_pars:
         if pad_fraction is None:
             pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
 
-        # Apply padding
         range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
         self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
         self.cons_max = np.array(self.cons_max) + range_pad
-
-
-
-
-
-        # Debug info
-        print(f"[HYPERPARAMS] profile: {profile}")
-        print(f"[HYPERPARAMS] model_type: {self.model_type} | tissue: {tissue_type}")
-        print(f"[HYPERPARAMS] cons_min: {np.round(self.cons_min, 6)}")
-        print(f"[HYPERPARAMS] cons_max: {np.round(self.cons_max, 6)}")
 
 
 

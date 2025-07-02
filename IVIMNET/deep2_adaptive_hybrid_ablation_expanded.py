@@ -83,15 +83,17 @@ class Net(nn.Module):
         self.original_mode = original_mode  # Toggle tuning/adaptive constraints on and off
         self.use_three_compartment = use_three_compartment
         if isinstance(net_pars, type):
-            self.net_pars = net_pars(use_three_compartment=self.use_three_compartment)
+            model_type = "3C" if self.use_three_compartment else "2C"
+            self.net_pars = net_pars(model_type=model_type, tissue_type="mixed", IR=IR)
         else:
-            self.net_pars = net_pars
+            self.net_pars = net_pars(model_type=model_type, tissue_type="mixed") #use local net_pars, and pass IR directly from net 
+
         # Ensure constraint type is set
         if not hasattr(self.net_pars, 'con') or not self.net_pars.con:
             self.net_pars.con = 'sigmoid'
 
         self.net_pars.IR = IR
-        self.IR=IR # This is to overwrite net_pars with the customized IR flag
+        self.IR=IR # This is to overwrite net_pars with the customized IR flag for safety
 
 
         if self.net_pars.width == 0:
@@ -279,19 +281,33 @@ class Net(nn.Module):
 
 
         # Assign constrained outputs
-        if self.use_three_compartment:  # Dpar, Fint, Dint, Fmv, Dmv, S0
-            Dpar = constrain(Dpar_raw, cmin[0], cmax[0])
-            Fint = constrain(Fint_raw, cmin[1], cmax[1])
-            Dint = constrain(Dint_raw, cmin[2], cmax[2])
-            Fmv  = constrain(Fmv_raw,  cmin[3], cmax[3])
-            Dmv  = constrain(Dmv_raw,  cmin[4], cmax[4])
-            S0   = constrain(S0_raw,   cmin[5], cmax[5]) if self.net_pars.fitS0 else S0_raw
-        else:  # Dpar, Fmv, Dmv, S0
-            Dpar = constrain(Dpar_raw, cmin[0], cmax[0])
-            Fmv  = constrain(Fmv_raw,  cmin[1], cmax[1])
-            Dmv  = constrain(Dmv_raw,  cmin[2], cmax[2])
-            S0   = constrain(S0_raw,   cmin[3], cmax[3]) if self.net_pars.fitS0 else S0_raw
+        raw_outputs = {}
 
+        # Constraint dictionary to call hyperparam's net_pars
+        if self.use_three_compartment:
+            raw_outputs = {
+                'Dpar': Dpar_raw,
+                'Fint': Fint_raw,
+                'Dint': Dint_raw,
+                'Fmv': Fmv_raw,
+                'Dmv': Dmv_raw,
+            }
+        else:
+            raw_outputs = {
+                'Dpar': Dpar_raw,
+                'Fmv': Fmv_raw,
+                'Dmv': Dmv_raw,
+            }
+
+        if self.net_pars.fitS0:
+            raw_outputs['S0'] = S0_raw
+        else:
+            raw_outputs['S0'] = torch.ones_like(Dpar_raw)
+
+        # Apply constraints dynamically
+        constrained_outputs = {}
+        for i, pname in enumerate(self.net_pars.param_names):
+            constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[i], cmax[i])
 
 
 
@@ -808,11 +824,36 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
     ########################################################################################################################################
     ### FUNCTION FOR PHASE AND WEIGHT TUNING ###
+    def update_clipping_constraints(self, tissue_type=None, model_type=None, pad_fraction=None, IR=None):
+        """
+        Dynamically rebuild constraint clipping bounds using a fresh net_pars instance.
+        Allows phase-dependent updates and tissue/model-specific shifts.
 
-    def update_clipping_constraints(self, new_net_pars):
-        self.net_pars.cons_min = torch.tensor(new_net_pars.cons_min, dtype=torch.float32, device=self.device)
-        self.net_pars.cons_max = torch.tensor(new_net_pars.cons_max, dtype=torch.float32, device=self.device)
-        print(f"[MODEL] Clipping constraints updated to: {new_net_pars.profile}")
+        Args:
+            tissue_type (str): Override tissue type (e.g., 'WMH', 'NAWM', 'mixed')
+            model_type (str): Override model type ('2C' or '3C')
+            pad_fraction (float): Optional override of constraint padding
+            IR (bool): Optional override of IR flag
+        """
+        tissue_type = tissue_type or self.net_pars.tissue_type
+        model_type = model_type or self.net_pars.model_type
+        IR = IR if IR is not None else self.net_pars.IR
+
+        # Rebuild fresh net_pars
+        updated_pars = net_pars(
+            model_type=model_type,
+            tissue_type=tissue_type,
+            pad_fraction=pad_fraction,
+            IR=IR
+        )
+
+        self.net_pars.cons_min = torch.tensor(updated_pars.cons_min, dtype=torch.float32, device=self.device)
+        self.net_pars.cons_max = torch.tensor(updated_pars.cons_max, dtype=torch.float32, device=self.device)
+        self.net_pars.tissue_type = updated_pars.tissue_type
+        self.net_pars.model_type = updated_pars.model_type
+        self.net_pars.IR = updated_pars.IR
+
+        print(f"[MODEL] Clipping constraints updated → model: {model_type}, tissue: {tissue_type}, pad={pad_fraction}")
 
 
     def freeze_encoder_by_phase(net, phase):
@@ -843,19 +884,19 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         elif phase == 2:
             for name, param in net.named_parameters():
                 param.requires_grad = True
-                net.encoder_soft_weights[name] = 0.01  # global downscale
+                net.encoder_soft_weights[name] = 0.1  # global downscale
             print("[PHASE 2] Tuning Dpar very slowly — all gradients downscaled.")
 
         elif phase == 3:
             for name, param in net.named_parameters():
-                #if 'encoder0' in name or 'encoder2' in name:
-                #    net.encoder_soft_weights[name] = 0.03  # Dmv, Fmv
-                if 'encoder1' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dpar
+                if 'encoder0' in name or 'encoder2' in name:
+                    net.encoder_soft_weights[name] = 0.3  # Dmv, Fmv
+                elif 'encoder1' in name:
+                    net.encoder_soft_weights[name] = 0.1  # Dpar
                 elif net.use_three_compartment and 'encoder3' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dint
+                    net.encoder_soft_weights[name] = 0.1  # Dint
                 elif net.use_three_compartment and 'encoder4' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Fint
+                    net.encoder_soft_weights[name] = 0.1  # Fint
 
             print("[PHASE 3] Focusing on Dmv, Fmv, Dint, Fint — soft update")
 
@@ -907,9 +948,11 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
     ########################################################################################################################################
     ### A: TRAINING MULTIPLE NETWORKS (NOT TESTED) ###
-    max_epochs_per_phase = 10
+    max_epochs_per_phase = 15
     fine_tune_phase_epoch_counter = 0
     loss_log = []
+    net.update_clipping_constraints(tissue_type="mixed", pad_fraction=padding_schedule.get(1, 0.3))
+
 
     if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
         ## Train
@@ -1086,18 +1129,21 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                                 net.load_state_dict(final_model, strict=False)
                                 fine_tune_phase = 2
-                                fine_tune_phase_epoch_counter = 5 # only tune phase 2 for a short time
+                                fine_tune_phase_epoch_counter = 0 # only tune phase 2 for a short time
                                 num_bad_epochs = 0
-                                arg.train_pars.patience = 3
+                                arg.train_pars.patience = 5
                                 set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
 
                                 #Update padfrac
                                 pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
-                                net.update_clipping_constraints(new_pars)
+                                net.update_clipping_constraints(
+                                    tissue_type=tissue_type,  # from learn_IVIM() args
+                                    pad_fraction=pad_frac
+                                    )
+
                                 print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
                             elif fine_tune_phase == 2:
@@ -1109,18 +1155,21 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                                 net.load_state_dict(final_model, strict=False)
                                 fine_tune_phase = 3
-                                fine_tune_phase_epoch_counter = 5
+                                fine_tune_phase_epoch_counter = 0
                                 num_bad_epochs = 0
-                                arg.train_pars.patience = 3
+                                arg.train_pars.patience = 5
                                 set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
 
                                 #Update padfrac
                                 pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
-                                net.update_clipping_constraints(new_pars)
+                                net.update_clipping_constraints(
+                                    tissue_type=tissue_type,  # from learn_IVIM() args
+                                    pad_fraction=pad_frac
+                                    )
+
                                 print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
                             elif fine_tune_phase == 3:
@@ -1363,11 +1412,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                                 #Update padfrac
                                 pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
-                                net.update_clipping_constraints(new_pars)
+                                net.update_clipping_constraints(
+                                    tissue_type=tissue_type,  # from learn_IVIM() args
+                                    pad_fraction=pad_frac
+                                    )
+
                                 print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
                             elif fine_tune_phase == 2:
@@ -1385,11 +1437,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                                 #Update padfrac
                                 pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                new_pars = net_pars(profile=net.net_pars.profile, pad_fraction=pad_frac)
-                                net.update_clipping_constraints(new_pars)
+                                net.update_clipping_constraints(
+                                    tissue_type=tissue_type,  # from learn_IVIM() args
+                                    pad_fraction=pad_frac
+                                    )
+
                                 print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(new_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(new_pars.cons_max, 6)}")
+                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
                             elif fine_tune_phase == 3:
@@ -2208,10 +2263,10 @@ def checkarg_net_pars(arg):
             raise ValueError("[checkarg_net_pars] Missing required inputs: use_three_compartment and tissue_type")
         
         precise_net_pars = net_pars(
-            profile=arg.profile,
-            use_three_compartment=arg.use_three_compartment,
+            model_type=arg.model_type,
             tissue_type=arg.tissue_type
-        )
+            )
+
 
         arg.cons_min = precise_net_pars.cons_min
         arg.cons_max = precise_net_pars.cons_max
@@ -2322,76 +2377,56 @@ class train_pars:
 
 
 class net_pars:
-    def __init__(self, profile="brain3_mixed", use_three_compartment=True, tissue_type="mixed"):
-        parts = profile.split("_")
-        model_type = parts[0]  # 'brain3' or 'brain2'
-        tissue_type = parts[1] if len(parts) > 1 else "mixed"
-        
-        self.profile = profile
+    def __init__(self, use_three_compartment=True, tissue_type="mixed"):
         self.tissue_type = tissue_type
         self.use_three_compartment = use_three_compartment
+        self.model_type = "3C" if use_three_compartment else "2C"
 
+        # Architecture settings
         self.dropout = 0.1
         self.batch_norm = True
         self.parallel = True
         self.con = 'sigmoid'
         self.fitS0 = True
-        self.IR = False
         self.depth = 2
         self.width = 0  # use auto-width based on b-values
 
         if use_three_compartment:
+            self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
             if tissue_type == "mixed":
                 self.cons_min = [0.0001, 0.0,   0.000, 0.0,   0.004, 0.9]
-                self.cons_max = [0.0022, 0.50,  0.005, 0.50,  0.25,  1.1]  
-            
+                self.cons_max = [0.0022, 0.50,  0.005, 0.50,  0.25,  1.1]
             elif tissue_type == "NAWM":
                 self.cons_min = [0.0003, 0.00,  0.000, 0.004, 0.001, 0.9]
                 self.cons_max = [0.0009, 0.15,  0.005, 0.015, 0.15,  1.1]
-            
             elif tissue_type == "WMH":
                 self.cons_min = [0.0003, 0.01,  0.001, 0.004, 0.001, 0.9]
-                self.cons_max = [0.00105, 0.30, 0.005, 0.025, 0.15,  1.1]  
-            
-            elif tissue_type == "original":  # original limit set by the ref paper
+                self.cons_max = [0.00105, 0.30, 0.005, 0.025, 0.15,  1.1]
+            elif tissue_type == "original":
                 self.cons_min = [0.0001, 0.0,   0.000, 0.0,   0.004, 0.9]
                 self.cons_max = [0.0015, 0.40,  0.004, 0.2,   0.2,   1.1]
-            
             else:
                 raise ValueError(f"[net_pars] Unknown 3C tissue type: {tissue_type}")
-            
-            self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
+
         else:
+            self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
             if tissue_type == "NAWM":
                 self.cons_min = [0.0001, 0.002, 0.000, 0.9]
                 self.cons_max = [0.00080, 0.075, 0.030, 1.1]
-
             elif tissue_type == "WMH":
-                self.cons_min = [0.0001, 0.002, 0.0000, 0.9]
-                self.cons_max = [0.00080, 0.125, 0.020,  1.1]
-
+                self.cons_min = [0.0001, 0.002, 0.000, 0.9]
+                self.cons_max = [0.00080, 0.125, 0.020, 1.1]
             elif tissue_type == "mixed":
-                self.cons_min = [0.0001, 0.002, 0.0000, 0.9]
-                self.cons_max = [0.00080, 0.125, 0.030,  1.1]
-
+                self.cons_min = [0.0001, 0.002, 0.000, 0.9]
+                self.cons_max = [0.00080, 0.125, 0.030, 1.1]
             else:
                 raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
 
-            self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
-
-
-        # Pad constraint range for sigmoid scaling zone for mixed
-        if tissue_type in ["mixed", "original"]:
-            pad_fraction = 0.3
-        else:
-            pad_fraction = 0.25
-
+        # Pad constraint range for sigmoid scaling
+        pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
         range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
-        boundsrange_min = range_pad
-        boundsrange_max = range_pad
-
-        self.cons_min = np.clip(np.array(self.cons_min) - boundsrange_min, a_min=0, a_max=None)
-        self.cons_max = np.array(self.cons_max) + boundsrange_max
+        self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
+        self.cons_max = np.array(self.cons_max) + range_pad
 
 
 

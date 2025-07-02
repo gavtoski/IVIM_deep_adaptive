@@ -432,92 +432,81 @@ def str2bool(v):
 		raise argparse.ArgumentTypeError('Boolean value expected.')
 
 if __name__ == "__main__":
-	# Initialize the argument parser
-	parser = argparse.ArgumentParser(description="Generate IVIM maps.")
+    # Initialize the argument parser
+    parser = argparse.ArgumentParser(description="Generate IVIM maps.")
 
-	# Add command-line arguments
-	parser.add_argument('--preproc_loc', type=str, required=True, help='Path to the preprocess data')
-	parser.add_argument('--bval_path', type=str, default='/scratch/nhoang2/IVIM_NeuroCovid/Data/bvals.txt',
-					help='Path to the appropriate bval file (default: shared 15 bvals)')
-	parser.add_argument('--dest_dir', type=str, required=True, help='Destination folder')
+    # Add command-line arguments
+    parser.add_argument('--preproc_loc', type=str, required=True, help='Path to the preprocess data')
+    parser.add_argument('--bval_path', type=str, default='/scratch/nhoang2/IVIM_NeuroCovid/Data/bvals.txt',
+                        help='Path to the appropriate bval file (default: shared 15 bvals)')
+    parser.add_argument('--dest_dir', type=str, required=True, help='Destination folder')
 
-	# Add training options
-	parser.add_argument('--original_mode', type=str2bool, required=True, help='Enable Original Mode')
-	parser.add_argument('--weight_tuning', type=str2bool, required=True, help='Enable weight tuning by bvals')
-	parser.add_argument('--IR', type=str2bool, required=True, help='Enable Inversion Recovery modeling')
-	parser.add_argument('--freeze_param', type=str2bool, required=True, help='Freeze Dpar during tuning')
-	parser.add_argument('--boost_toggle', type=str2bool, required=True, help='Enable low-b or mid-b loss boosting')
-	parser.add_argument('--ablate_option', type=str, required=True, help='Constraint ablation mode')
-	parser.add_argument('--use_three_compartment', type=str2bool, required=True, help='Use 3C or 2C model')
-	parser.add_argument('--input_type', type=str, required=True, help='image or array input')
-	parser.add_argument('--tissue_type', type=str, required=True, help='tissue type: mixed, NAWM, or WMH')
+    # Add training options
+    parser.add_argument('--original_mode', type=str2bool, required=True, help='Enable Original Mode')
+    parser.add_argument('--weight_tuning', type=str2bool, required=True, help='Enable weight tuning by bvals')
+    parser.add_argument('--IR', type=str2bool, required=True, help='Enable Inversion Recovery modeling')
+    parser.add_argument('--freeze_param', type=str2bool, required=True, help='Freeze Dpar during tuning')
+    parser.add_argument('--boost_toggle', type=str2bool, required=True, help='Enable low-b or mid-b loss boosting')
+    parser.add_argument('--ablate_option', type=str, required=True, help='Constraint ablation mode')
+    parser.add_argument('--use_three_compartment', type=str2bool, required=True, help='Use 3C or 2C model')
+    parser.add_argument('--input_type', type=str, required=True, help='image or array input')
+    parser.add_argument('--tissue_type', type=str, required=True, help='tissue type: mixed, NAWM, or WMH')
 
-	# Pass customized bound dictionary for constraint prior
-	# Example for passing customized dictionary: --custom_dict '{"Dpar": [0.0005, 0.001], "Dmv": [0.01, 0.03], "Fmv": [0.01, 0.07]}' ect...
-	def parse_custom_dict(val):
-		if val == "None" or val=='none':
-			return None
-		return json.loads(val)
-	parser.add_argument('--custom_dict', type=parse_custom_dict, default=None)
+    # Handle custom constraint bounds
+    def parse_custom_dict(val):
+        if val == "None" or val == 'none':
+            return None
+        return json.loads(val)
+    parser.add_argument('--custom_dict', type=parse_custom_dict, default=None)
 
-	# Parse the command-line arguments
-	args = parser.parse_args()
+    # Parse the command-line arguments
+    args = parser.parse_args()
 
-	# Create destination directory if it doesn't exist
-	os.makedirs(args.dest_dir, exist_ok=True)
+    # Create destination directory if it doesn't exist
+    os.makedirs(args.dest_dir, exist_ok=True)
 
-	# Load hyperparameters
-	# NOTE: When using original mode, the tissue_type is 'mixed'
-	# to match the configuration used in the original publication (Voorter et al.)
-	print('\n[INFO] Loading profile...\n')
+    # Determine model and tissue config
+    model_type = "3C" if args.use_three_compartment else "2C"
+    tissue_type = "mixed" if args.original_mode else args.tissue_type
 
-	if args.original_mode:
-	    profile = "brain3_mixed"
-	elif args.use_three_compartment:
-	    profile = f"brain3_{args.tissue_type}"
-	else:
-	    profile = f"brain2_{args.tissue_type}"
+    print('\n Loading net_pars...\n')
 
+    # Load hyperparameters using updated net_pars logic
+    arg = hp(model_type=model_type, tissue_type=tissue_type, IR=args.IR)
 
-	# Define arg using hyperparams file
-	arg = hp(profile)
+    # Set additional flags before validation
+    arg.use_three_compartment = args.use_three_compartment
+    arg.tissue_type = args.tissue_type
+    arg.model_type = model_type
 
-	# Set required fields *before* checkarg uses them
-	arg.use_three_compartment = args.use_three_compartment
-	arg.tissue_type = args.tissue_type
-	arg.model_type = "3C" if args.use_three_compartment else "2C"
+    arg = deep2.checkarg(arg)  # Auto-fill missing args
 
-	arg = deep2.checkarg(arg)  # Check missing args and set to default value
+    # Set training directory
+    arg.train_pars.dest_dir = args.dest_dir
 
-	# Set other attributes
-	arg.train_pars.dest_dir = args.dest_dir
-	arg.net_pars.IR = args.IR              
+    print(vars(arg.train_pars))
+    print(f"[CONFIG] Using model_type: {model_type}, tissue_type: {tissue_type}, IR: {args.IR}")
 
-	print(vars(arg.train_pars))
-	print(f"[CONFIG] Using profile: {profile}, model_type: {arg.model_type}, IR: {arg.net_pars.IR}")
+    # Run the map generator
+    IVIM_object = map_generator_NN(
+        input_path=args.preproc_loc,
+        bvalues_path=args.bval_path,
+        dest_dir=args.dest_dir,
+        arg=arg,
+        original_mode=args.original_mode,
+        weight_tuning=args.weight_tuning,
+        IR=args.IR,
+        freeze_param=args.freeze_param,
+        boost_toggle=args.boost_toggle,
+        ablate_option=args.ablate_option,
+        use_three_compartment=args.use_three_compartment,
+        input_type=args.input_type,
+        tissue_type=args.tissue_type,
+        custom_dict=args.custom_dict
+    )
 
-
-
-	# Initialize and run the map generator
-	IVIM_object = map_generator_NN(
-		input_path=args.preproc_loc,
-		bvalues_path=args.bval_path,
-		dest_dir=args.dest_dir,
-		arg=arg,
-		original_mode=args.original_mode,
-		weight_tuning=args.weight_tuning,
-		IR=args.IR,
-		freeze_param=args.freeze_param,
-		boost_toggle=args.boost_toggle,
-		ablate_option=args.ablate_option,
-		use_three_compartment=args.use_three_compartment,
-		input_type=args.input_type,
-		tissue_type=args.tissue_type,
-		custom_dict=args.custom_dict
-	)
-	
-	IVIM_object.predict_IVIM()
-	plt.close('all')
+    IVIM_object.predict_IVIM()
+    plt.close('all')
 
 
 
