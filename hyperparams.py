@@ -21,7 +21,7 @@ import numpy as np
 
 
 class train_pars:
-    def __init__(self, profile):
+    def __init__(self):
         self.optim='adam' #these are the optimisers implementd. Choices are: 'sgd'; 'sgdr'; 'adagrad' adam
         self.lr = 0.00003 # this is the learning rate.
         self.patience= 10 # this is the number of epochs without improvement that the network waits untill determining it found its optimum
@@ -137,8 +137,10 @@ class hyperparams:
         self.tissue_type = tissue_type
         self.use_three_compartment = model_type == "3C"
 
+        profile_model = "brain3" if model_type == "3C" else "brain2"
+        profile = f"{profile_model}_{tissue_type}"
+        self.train_pars = train_pars()
         self.net_pars = net_pars(model_type=model_type, tissue_type=tissue_type, IR=IR)
-        self.train_pars = train_pars(model_type + "_" + tissue_type)
         self.fit = lsqfit()
         self.sim = sim()
         self.rel_times = rel_times()

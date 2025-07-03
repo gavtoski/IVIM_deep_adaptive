@@ -16,8 +16,8 @@ import tqdm
 import json
 
 # Load IVIM neural net dependencies from main folder
-sys.path.append('/scratch/gschifit_lab/NeuroCovid/IVIM/')
-sys.path.append('/scratch/gschifit_lab/NeuroCovid/IVIM/IVIM3brain-NET-main/')
+sys.path.append('/scratch/nhoang2/IVIM_NeuroCovid/Synthetic_Codes/IVIMNET/')
+sys.path.append('/scratch/nhoang2/IVIM_NeuroCovid/Synthetic_Codes/')
 
 import IVIMNET.deep2_adaptive_hybrid_ablation_expanded as deep2
 import IVIMNET.deep as deep
@@ -472,7 +472,7 @@ if __name__ == "__main__":
     print('\n[INFO] Loading hyperparams with model/tissue...\n')
 
     # Load full hyperparameter object
-    arg = hyperparams(model_type=model_type, tissue_type=tissue_type, IR=args.IR)
+    arg = hp(model_type=model_type, tissue_type=tissue_type, IR=args.IR)
 
     # Set any training-specific flags
     arg.use_three_compartment = args.use_three_compartment

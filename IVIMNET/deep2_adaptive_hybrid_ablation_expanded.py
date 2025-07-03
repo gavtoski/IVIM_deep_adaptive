@@ -38,7 +38,9 @@ import warnings
 import pandas as pd
 from collections import defaultdict
 from scipy.stats import linregress
-
+import sys
+sys.path.append('/scratch/nhoang2/IVIM_NeuroCovid/Synthetic_Codes/') #change this to your hyperparam loc
+from hyperparams import net_pars as net_pars_class
 # seed 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -77,16 +79,21 @@ class Net(nn.Module):
         """
         super(Net, self).__init__()
 
+        # --------------------------------------------------------------------------------------------------------------
+        # Declare necessary variables for training/fine-tuning/validation
+        # --------------------------------------------------------------------------------------------------------------
 
         self.bvalues = bvalues
         self.rel_times = rel_times
         self.original_mode = original_mode  # Toggle tuning/adaptive constraints on and off
         self.use_three_compartment = use_three_compartment
+        model_type = "3C" if self.use_three_compartment else "2C"
+
         if isinstance(net_pars, type):
-            model_type = "3C" if self.use_three_compartment else "2C"
-            self.net_pars = net_pars(model_type=model_type, tissue_type="mixed", IR=IR)
+            self.net_pars = net_pars(model_type=model_type, tissue_type=tissue_type, IR=IR, pad_fraction=pad_fraction)
+
         else:
-            self.net_pars = net_pars(model_type=model_type, tissue_type="mixed") #use local net_pars, and pass IR directly from net 
+            self.net_pars = net_pars  
 
         # Ensure constraint type is set
         if not hasattr(self.net_pars, 'con') or not self.net_pars.con:
@@ -106,8 +113,6 @@ class Net(nn.Module):
         if not self.use_three_compartment:
             self.net_pars.depth += 1 # can try switching to 1 if you prefer but I dont think you need
             print(f"Increased network depth for 2C model: depth = {self.net_pars.depth}") #2C tends to underfit
-
-        #self.log_opt_enable = False  # externally set this to True only after convergence
         
         self.freeze_param = False if original_mode else freeze_param
         self.bval_mask = torch.ones_like(bvalues).bool()  # mask for fine tuning
@@ -134,8 +139,9 @@ class Net(nn.Module):
             else:
                 self.scaling_factor = nn.Parameter(torch.zeros(3), requires_grad=False)
 
-
-        # define module lists. If network is not parallel, we can do with 1 list, otherwise we need a list per parameter
+        # --------------------------------------------------------------------------------------------------------------
+        # Creating neural network layers (still in init)
+        # --------------------------------------------------------------------------------------------------------------
         self.fc_layers0 = nn.ModuleList() 
         if self.net_pars.parallel:
             self.fc_layers1 = nn.ModuleList()
@@ -205,6 +211,9 @@ class Net(nn.Module):
         else:
             self.encoder0 = nn.Sequential(*self.fc_layers0, nn.Linear(self.net_pars.width, self.est_pars))
 
+    # --------------------------------------------------------------------------------------------------------------
+    # Necessary function for fine_tuning
+    # --------------------------------------------------------------------------------------------------------------
     def compute_bval_weights(self, bvalues, phase): 
         weights = torch.ones_like(bvalues)
 
@@ -230,7 +239,39 @@ class Net(nn.Module):
 
         return weights
 
-    
+    def update_clipping_constraints(self, tissue_type=None, model_type=None, pad_fraction=None, IR=None):
+        """
+        Dynamically rebuild constraint clipping bounds using a fresh net_pars instance.
+        Allows phase-dependent updates and tissue/model-specific shifts.
+
+        Args:
+            tissue_type (str): Override tissue type (e.g., 'WMH', 'NAWM', 'mixed')
+            model_type (str): Override model type ('2C' or '3C')
+            pad_fraction (float): Optional override of constraint padding
+            IR (bool): Optional override of IR flag
+        """
+        tissue_type = tissue_type or self.net_pars.tissue_type
+        model_type = model_type or self.net_pars.model_type
+        IR = IR if IR is not None else self.net_pars.IR
+
+        updated_pars = net_pars_class(
+            model_type=model_type,
+            tissue_type=tissue_type,
+            pad_fraction=pad_fraction,
+            IR=IR
+        )
+
+        self.net_pars.cons_min = torch.tensor(updated_pars.cons_min, dtype=torch.float32, device=self.bvalues.device)
+        self.net_pars.cons_max = torch.tensor(updated_pars.cons_max, dtype=torch.float32, device=self.bvalues.device)
+        self.net_pars.tissue_type = updated_pars.tissue_type
+        self.net_pars.model_type = updated_pars.model_type
+        self.net_pars.IR = updated_pars.IR
+
+        print(f"[MODEL] Clipping constraints updated → model: {model_type}, tissue: {tissue_type}, pad={pad_fraction}")
+
+    # --------------------------------------------------------------------------------------------------------------
+    # Forward function to propagate neural net/inference:
+    # --------------------------------------------------------------------------------------------------------------  
     def forward(self, X):
         # Mask only used for signal reconstruction
         bvals = self.bvalues
@@ -309,7 +350,17 @@ class Net(nn.Module):
         for i, pname in enumerate(self.net_pars.param_names):
             constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[i], cmax[i])
 
+        # Extract constrained parameters for convenience
+        Dpar = constrained_outputs['Dpar']
+        Fmv  = constrained_outputs['Fmv']
+        Dmv  = constrained_outputs['Dmv']
+        S0   = constrained_outputs['S0']
 
+        if self.use_three_compartment:
+            Dint = constrained_outputs['Dint']
+            Fint = constrained_outputs['Fint']
+        else:
+            Dint = Fint = None
 
         # Convert all constants to torch tensors on the correct device
         if self.use_three_compartment: 
@@ -358,7 +409,9 @@ class Net(nn.Module):
 
             return X_pred, Dpar, Fmv, Dmv, S0
 
-########################################################################################################################
+#################################################################### End of Net ##############################################################################
+##############################################################################################################################################################
+
 # Constraint for custom loss functions
 def expand_range(rng, buffer=0.1):
     low, high = rng
@@ -438,7 +491,8 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
     return safe_prior
 
 
-###################################################################################################################
+#################################################################### Custom Loss Functions ###################################################################
+##############################################################################################################################################################
 
 def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model, 
     freeze_param=False,
@@ -449,22 +503,27 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
     tissue_type="mixed",
     custom_dict=None):
 
+    #---------------------
+    # Calculating mse loss
+    #---------------------
     if model.original_mode:
         mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
-        if debug ==1:
-            return mse_loss, {'mse_loss':mse_loss} 
+        if debug == 1:
+            return mse_loss, {'mse_loss': mse_loss} 
         return mse_loss
 
-    if not model.original_mode and phase >=1:
-        ###########################################################################
-        # Apply weight tuning according to bval mask
-        if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
-            X_batch = X_batch[:, model.bval_mask]
+    if not model.original_mode and phase >= 1:
 
-        # Weighted MSE
+        # Apply bval mask always (both train + val)
+        if hasattr(model, 'bval_mask') and model.bval_mask is not None:
+            X_batch = X_batch[:, model.bval_mask]
+            if X_pred.shape[1] != X_batch.shape[1]:
+                X_pred = X_pred[:, model.bval_mask]
+
+        # Weighted MSE loss
         if getattr(model, 'weight_tuning', False):
             weights = model.bval_weights.to(X_batch.device)
-            if model.training and hasattr(model, 'bval_mask'):
+            if hasattr(model, 'bval_mask') and model.bval_mask is not None:
                 weights = weights[model.bval_mask]
             weights = weights.view(1, -1)
             weights = weights / weights.mean()
@@ -472,37 +531,44 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
         else:
             mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
 
-        # Optional phase boost
+        # Optional phase-based MSE boost
         if boost_mse_by_phase:
             boost_factor = {1: 1.0, 2: 1.0, 3: 1.05, 4: 1.05}.get(phase, 1.0)
             mse_loss *= boost_factor
 
-        ############################################################################
-        # Constraint penalties, 2C
-        bounds = constraint_prior_func(tissue_type=tissue_type, model_type="2C", custom_dict=None)
+        # ----------------------------------------------------
+        # Return only mse_loss from signal for validation (no constraint penalty)
+        # ----------------------------------------------------
+        if not model.training:
+            if debug == 1:
+                return mse_loss, {'mse_loss': mse_loss}
+            return mse_loss
+
+        # ----------------------------
+        # Constraint penalties (2C)
+        # ----------------------------
+        bounds = constraint_prior_func(tissue_type=tissue_type, model_type="2C", custom_dict=custom_dict)
 
         penalty_order = torch.mean(F.softplus(Dpar - Dmv)) 
         penalty_dpar  = torch.mean(F.softplus(bounds["Dpar"][0] - Dpar) + F.softplus(Dpar - bounds["Dpar"][1]))
         penalty_dmv   = torch.mean(F.softplus(bounds["Dmv"][0]  - Dmv)  + F.softplus(Dmv  - bounds["Dmv"][1]))
         penalty_fmv   = torch.mean(F.softplus(bounds["Fmv"][0]  - Fmv)  + F.softplus(Fmv  - bounds["Fmv"][1]))
 
-
         viol_mask = {
-        "Dpar_low":  Dpar < 0.1e-3,
-        "Dpar_high": Dpar > 4.0e-3,
-        "Dmv_low":   Dmv < 1e-3,
-        "Dmv_high":  Dmv > 50e-3,
-        "fmv_low" :  Fmv < 1e-4,
-        "fmv_high":  Fmv > 0.2,
-        "order_viol": (Dpar > Dmv),
+            "Dpar_low":  Dpar < 0.1e-3,
+            "Dpar_high": Dpar > 4.0e-3,
+            "Dmv_low":   Dmv < 1e-3,
+            "Dmv_high":  Dmv > 50e-3,
+            "fmv_low" :  Fmv < 1e-4,
+            "fmv_high":  Fmv > 0.2,
+            "order_viol": (Dpar > Dmv),
         }
-               
         viol_rates = {f"viol_{k}": v.float().mean().item() for k, v in viol_mask.items()}
 
-        # Constraint weights, learnable parameters by the net
+        # Constraint weights (learnable)
         penalty_order_weight, penalty_fmv_weight, penalty_magnitude_weight = model.scaling_factor.clone()
 
-        # Simplified ablation logic
+        # Apply ablations if specified to remove certain constraints
         if ablate_option == 'remove_fmv':
             penalty_fmv_weight = 0.0
         elif ablate_option == 'remove_order':
@@ -510,29 +576,32 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
         elif ablate_option == 'remove_magnitude':
             penalty_magnitude_weight = 0.0
 
-
-        # Normalize by total constraint magnitude and rescale by MSE
-        constraint_terms = [penalty_order, penalty_fmv, penalty_dpar + penalty_dmv ]
+        #### Normalize and apply weights to constraint terms
+        constraint_terms = [penalty_order, penalty_fmv, penalty_dpar + penalty_dmv]
         total_penalty = sum(constraint_terms).detach() + 1e-8
 
-        order_term  = (penalty_order / total_penalty) * penalty_order_weight
-        fmv_term    = (penalty_fmv   / total_penalty) * penalty_fmv_weight
-        mag_term    = ((penalty_dpar + penalty_dmv) / total_penalty) * penalty_magnitude_weight
-        
-        scaled_constraint_loss = (order_term + fmv_term  + mag_term) * mse_loss.detach()
+        order_term = (penalty_order / total_penalty) * penalty_order_weight
+        fmv_term   = (penalty_fmv   / total_penalty) * penalty_fmv_weight
+        mag_term   = ((penalty_dpar + penalty_dmv) / total_penalty) * penalty_magnitude_weight
+
+        # ------------------------------------------------------
+        # Compute total loss
+        # ------------------------------------------------------
+        penalty_scale = 0.1
+        scaled_constraint_loss = (order_term + fmv_term + mag_term) * penalty_scale
         total_loss = mse_loss + scaled_constraint_loss
 
         if debug == 1:
             return total_loss, {
-            'mse_loss': mse_loss,
-            'order_penalty': order_term * mse_loss.detach(),
-            'fmv_penalty': fmv_term * mse_loss.detach(),
-            'mag_penalty': mag_term * mse_loss.detach(),
-            'total_loss': total_loss,
-            **viol_rates
-        }
-        return total_loss
+                'mse_loss': mse_loss,
+                'order_penalty': order_term * penalty_scale,
+                'fmv_penalty': fmv_term * penalty_scale,
+                'mag_penalty': mag_term * penalty_scale,
+                'total_loss': total_loss,
+                **viol_rates
+            }
 
+        return total_loss
 
 
 def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
@@ -544,23 +613,28 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
     tissue_type="mixed",
     custom_dict=None
     ):
-
+    
+    #---------------------
+    # Calculating mse loss
+    #---------------------
     if model.original_mode:
         mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
-        if debug ==1:
-            return mse_loss, {'mse_loss':mse_loss} 
+        if debug == 1:
+            return mse_loss, {'mse_loss': mse_loss} 
         return mse_loss
 
-    if not model.original_mode and phase >=1:
-        ##############################################################################
-        # Apply weight tuning according to bval mask
-        if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
-            X_batch = X_batch[:, model.bval_mask]
+    if not model.original_mode and phase >= 1:
 
-        # Weighted MSE
+        # Apply bval mask always (train + val)
+        if hasattr(model, 'bval_mask') and model.bval_mask is not None:
+            X_batch = X_batch[:, model.bval_mask]
+            if X_pred.shape[1] != X_batch.shape[1]:
+                X_pred = X_pred[:, model.bval_mask]
+
+        # Weighted MSE loss
         if getattr(model, 'weight_tuning', False):
             weights = model.bval_weights.to(X_batch.device)
-            if model.training and hasattr(model, 'bval_mask'):
+            if hasattr(model, 'bval_mask'):
                 weights = weights[model.bval_mask]
             weights = weights.view(1, -1)
             weights = weights / weights.mean()
@@ -568,44 +642,53 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
         else:
             mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
 
-        # Optional phase boost
+        # Optional MSE boost by phase
         if boost_mse_by_phase:
-            boost_factor = {1: 1.0, 2: 1.00, 3: 1.05, 4: 1.1}.get(phase, 1.0)
+            boost_factor = {1: 1.0, 2: 1.0, 3: 1.05, 4: 1.1}.get(phase, 1.0)
             mse_loss *= boost_factor
-        ###############################################################################
-        # Adding constraint penalties to loss function via constraint_prior_func(tissue_type=mixed, model_type=3C, customize=0) instead:
-        bounds = constraint_prior_func(tissue_type=tissue_type, model_type="3C", custom_dict=None)
 
-        penalty_order = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv)) 
-        penalty_dpar  = torch.mean(F.softplus(bounds["Dpar"][0] - Dpar) + F.softplus(Dpar - bounds["Dpar"][1]))
-        penalty_dint  = torch.mean(F.softplus(bounds["Dint"][0] - Dint) + F.softplus(Dint - bounds["Dint"][1]))
-        penalty_dmv   = torch.mean(F.softplus(bounds["Dmv"][0]  - Dmv)  + F.softplus(Dmv  - bounds["Dmv"][1]))
-        penalty_fmv   = torch.mean(F.softplus(bounds["Fmv"][0]  - Fmv)  + F.softplus(Fmv  - bounds["Fmv"][1]))
-        penalty_fint  = torch.mean(F.softplus(bounds["Fint"][0] - Fint) + F.softplus(Fint - bounds["Fint"][1]))
-        penalty_ftotal = torch.mean(F.softplus(Fmv + Fint - bounds["Ftotal"][1]))         # Ftotal only has an upper bound
-                
+        # -------------------------------------------------------------------------
+        # Return only mse_loss from signal for validation (no constraint penalty)
+        # -------------------------------------------------------------------------
+        if not model.training:
+            if debug == 1:
+                return mse_loss, {'mse_loss': mse_loss}
+            return mse_loss
+
+        #------------------------
+        # Constraint penalties
+        #------------------------
+        bounds = constraint_prior_func(tissue_type=tissue_type, model_type="3C", custom_dict=custom_dict)
+
+        penalty_order  = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv)) 
+        penalty_dpar   = torch.mean(F.softplus(bounds["Dpar"][0] - Dpar) + F.softplus(Dpar - bounds["Dpar"][1]))
+        penalty_dint   = torch.mean(F.softplus(bounds["Dint"][0] - Dint) + F.softplus(Dint - bounds["Dint"][1]))
+        penalty_dmv    = torch.mean(F.softplus(bounds["Dmv"][0]  - Dmv)  + F.softplus(Dmv  - bounds["Dmv"][1]))
+        penalty_fmv    = torch.mean(F.softplus(bounds["Fmv"][0]  - Fmv)  + F.softplus(Fmv  - bounds["Fmv"][1]))
+        penalty_fint   = torch.mean(F.softplus(bounds["Fint"][0] - Fint) + F.softplus(Fint - bounds["Fint"][1]))
+        penalty_ftotal = torch.mean(F.softplus(Fmv + Fint - bounds["Ftotal"][1]))
+
+        # Violation mask
         viol_mask = {
-        "Dpar_low":  Dpar < 0.1e-3,
-        "Dpar_high": Dpar > 2.0e-3,
-        "Dint_low":  Dint < 1.5e-3,
-        "Dint_high": Dint > 3.0e-3,
-        "Dmv_low":   Dmv < 10e-3,
-        "Dmv_high":  Dmv > 140e-3,
-        "fint_low":  Fint < 0.02,
-        "fint_high": Fint > 0.6,
-        "fmv_high":  Fmv > 0.1,
-        "ftotal_high": (Fmv + Fint) > 0.75,
-        "order_viol": (Dpar > Dint) | (Dint > Dmv),
+            "Dpar_low":  Dpar < 0.1e-3,
+            "Dpar_high": Dpar > 2.0e-3,
+            "Dint_low":  Dint < 1.5e-3,
+            "Dint_high": Dint > 3.0e-3,
+            "Dmv_low":   Dmv < 10e-3,
+            "Dmv_high":  Dmv > 140e-3,
+            "fint_low":  Fint < 0.02,
+            "fint_high": Fint > 0.6,
+            "fmv_high":  Fmv > 0.1,
+            "ftotal_high": (Fmv + Fint) > 0.75,
+            "order_viol": (Dpar > Dint) | (Dint > Dmv),
         }
-
-        # Compute violation rates as floats (mean across voxels) 
         viol_rates = {f"viol_{k}": v.float().mean().item() for k, v in viol_mask.items()}
 
-        # Constraint weights, learnable parameters by the net
+        # Constraint weights
         penalty_order_weight, penalty_fmv_weight, penalty_fint_weight, \
         penalty_ftotal_weight, penalty_magnitude_weight = model.scaling_factor
 
-        # Simplified ablation logic
+        # Apply ablation logic
         if ablate_option == 'remove_fmv':
             penalty_fmv_weight = 0.0
         elif ablate_option == 'remove_order':
@@ -617,33 +700,53 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
         elif ablate_option == 'remove_magnitude':
             penalty_magnitude_weight = 0.0
 
-        # Normalize by total constraint magnitude and rescale by MSE
-        constraint_terms = [penalty_order, penalty_fmv, penalty_fint, penalty_ftotal, penalty_dpar + penalty_dmv + penalty_dint]
+        # Normalize scaling
+        constraint_terms = [
+            penalty_order,
+            penalty_fmv,
+            penalty_fint,
+            penalty_ftotal,
+            penalty_dpar + penalty_dmv + penalty_dint
+        ]
         total_penalty = sum(constraint_terms).detach() + 1e-8
 
-        order_term  = (penalty_order / total_penalty) * penalty_order_weight
-        fmv_term    = (penalty_fmv   / total_penalty) * penalty_fmv_weight
-        fint_term   = (penalty_fint  / total_penalty) * penalty_fint_weight
-        ftotal_term = (penalty_ftotal/ total_penalty) * penalty_ftotal_weight
-        mag_term    = ((penalty_dpar + penalty_dmv + penalty_dint) / total_penalty) * penalty_magnitude_weight
-        
-        scaled_constraint_loss = (0.2*order_term + 0.1*fmv_term + 0.5*fint_term + 0.8*mag_term + 1*ftotal_term) * mse_loss.detach()
+        order_term   = (penalty_order / total_penalty) * penalty_order_weight
+        fmv_term     = (penalty_fmv   / total_penalty) * penalty_fmv_weight
+        fint_term    = (penalty_fint  / total_penalty) * penalty_fint_weight
+        ftotal_term  = (penalty_ftotal/ total_penalty) * penalty_ftotal_weight
+        mag_term     = ((penalty_dpar + penalty_dmv + penalty_dint) / total_penalty) * penalty_magnitude_weight
+
+        #-----------------------------
+        # Return loss and breakdown
+        #-----------------------------
+        penalty_scale = 0.1
+        scaled_constraint_loss = (
+            0.2 * order_term +
+            0.1 * fmv_term +
+            0.5 * fint_term +
+            0.8 * mag_term +
+            1.0 * ftotal_term
+        ) * penalty_scale
+
         total_loss = mse_loss + scaled_constraint_loss
 
-        ###############################################################################################################################
+
         if debug == 1:
             return total_loss, {
                 'mse_loss': mse_loss,
-                'order_penalty': order_term * mse_loss.detach(),
-                'fmv_penalty': fmv_term * mse_loss.detach(),
-                'fint_penalty': fint_term * mse_loss.detach(),
-                'ftotal_penalty': ftotal_term * mse_loss.detach(),
-                'mag_penalty': mag_term * mse_loss.detach(),
+                'order_penalty': order_term * penalty_scale,
+                'fmv_penalty': fmv_term * penalty_scale,
+                'fint_penalty': fint_term * penalty_scale,
+                'ftotal_penalty': ftotal_term * penalty_scale,
+                'mag_penalty': mag_term * penalty_scale,
                 'total_loss': total_loss,
                 **viol_rates
             }
 
         return total_loss
+
+######################################################### End of Custom Loss Functions ######################################################
+#############################################################################################################################################
 
 
 def to_numpy_dict(tensor_dict):
@@ -677,7 +780,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     :return net: returns a trained network
     """
     ########################################################################################################################################
-    ### INITIAL SETUP ###
+    
+    #------------------------------------------
+    # TRAIN AND VAL LOADER PREP
+    #------------------------------------------
 
     torch.backends.cudnn.benchmark = True
     arg = checkarg(arg)
@@ -735,9 +841,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     # validation data is loaded here. 
     val_cap = 1000  # cap number of validation batches
     inferloader = utils.DataLoader(val_set,
-                               batch_size=1024,
+                               batch_size=32 * arg.train_pars.batch_size,
                                shuffle=False,
-                               drop_last=False,
+                               drop_last=True,
                                num_workers=2
                                )
 
@@ -748,6 +854,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
     batch_norm2 = np.floor(len(val_set) // (32 * arg.train_pars.batch_size))
 
+
+    #------------------------------------------
+    # PHASE TUNING PARAMETERES
+    #------------------------------------------
     # defining optimiser
     optimizer = load_optimizer(net, arg)
     scheduler = init_scheduler(optimizer, arg.train_pars.patience) if arg.train_pars.scheduler else None
@@ -822,39 +932,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         'encoder5': 'S0'  # Include only if fitS0 is True
         }
 
-    ########################################################################################################################################
-    ### FUNCTION FOR PHASE AND WEIGHT TUNING ###
-    def update_clipping_constraints(self, tissue_type=None, model_type=None, pad_fraction=None, IR=None):
-        """
-        Dynamically rebuild constraint clipping bounds using a fresh net_pars instance.
-        Allows phase-dependent updates and tissue/model-specific shifts.
-
-        Args:
-            tissue_type (str): Override tissue type (e.g., 'WMH', 'NAWM', 'mixed')
-            model_type (str): Override model type ('2C' or '3C')
-            pad_fraction (float): Optional override of constraint padding
-            IR (bool): Optional override of IR flag
-        """
-        tissue_type = tissue_type or self.net_pars.tissue_type
-        model_type = model_type or self.net_pars.model_type
-        IR = IR if IR is not None else self.net_pars.IR
-
-        # Rebuild fresh net_pars
-        updated_pars = net_pars(
-            model_type=model_type,
-            tissue_type=tissue_type,
-            pad_fraction=pad_fraction,
-            IR=IR
-        )
-
-        self.net_pars.cons_min = torch.tensor(updated_pars.cons_min, dtype=torch.float32, device=self.device)
-        self.net_pars.cons_max = torch.tensor(updated_pars.cons_max, dtype=torch.float32, device=self.device)
-        self.net_pars.tissue_type = updated_pars.tissue_type
-        self.net_pars.model_type = updated_pars.model_type
-        self.net_pars.IR = updated_pars.IR
-
-        print(f"[MODEL] Clipping constraints updated → model: {model_type}, tissue: {tissue_type}, pad={pad_fraction}")
-
+    #------------------------------------------
+    # FUNCTIONS FOR PHASE AND WEIGHT TUNING
+    #------------------------------------------
 
     def freeze_encoder_by_phase(net, phase):
         """
@@ -946,9 +1026,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
             net.bval_weights = torch.ones_like(bvalues).to(device)
             print(f"[PHASE {phase}] Full bval mask (no filtering), uniform weights")
 
-    ########################################################################################################################################
-    ### A: TRAINING MULTIPLE NETWORKS (NOT TESTED) ###
-    max_epochs_per_phase = 15
+    #------------------------------------------------------
+    # NETWORKS TRAINING LOOPS: MULTIPLE PARALLEL NETWORKS
+    #------------------------------------------------------
+    max_epochs_per_phase = 10
     fine_tune_phase_epoch_counter = 0
     loss_log = []
     net.update_clipping_constraints(tissue_type="mixed", pad_fraction=padding_schedule.get(1, 0.3))
@@ -1103,6 +1184,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 num_bad_epochs = 0
             else:
                 num_bad_epochs += 1
+            fine_tune_phase_epoch_counter += 1
 
                 # Phase tuning start here
                 # Trigger phase change either by patience or by phase duration cap
@@ -1183,8 +1265,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                     else:
                         print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
                         break
-                else:
-                    fine_tune_phase_epoch_counter += 1
+                
 
             # plot loss and plot 4 fitted curves
             if epoch > 0:
@@ -1208,8 +1289,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 "val_loss": running_loss_val
             }) # Collect plots over training
 
-    #############################################################################################################################################
-    ### TRAINING SINGLE NETWORKS ###  
+    #------------------------------------------------------
+    # NETWORKS TRAINING LOOPS: SINGLE NETWORK
+    #------------------------------------------------------
     else:     
         for epoch in range(100):
 
@@ -1380,6 +1462,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 num_bad_epochs = 0
             else:
                 num_bad_epochs += 1
+            fine_tune_phase_epoch_counter += 1
 
                 #Fine tuning start here
                 # Check if it's time to switch phase: patience OR max_epochs_per_phase
@@ -1457,9 +1540,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                     else:
                         print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
                         break
-                else:
-                    fine_tune_phase_epoch_counter += 1
-
 
 
             if loss_components is not None:
@@ -1478,8 +1558,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
             })
 
 
-    #########################################################################################################################################
-    ### PLOT RESULTS ###
+    #------------------------------------------------------
+    # VISUALIZATION: PLOT TRAINING PROGRESS
+    #------------------------------------------------------
 
     # Detect model type
     model_type = "2C" if getattr(arg, 'model_type', '3C') == '2C' else "3C"  # fallback to 3C
@@ -1577,7 +1658,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 
     #  Plot 1: violation-vs-penalty for each group
-    # Set up violation keys based on model
+    #  Set up violation keys based on model
     if model_type == "3C":
         violation_groups = {
             'viol_order_viol': ['viol_order_viol'],
@@ -1726,87 +1807,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         print(f"[WARNING] Failed to generate penalty plot: {e}")
 
 
-
-    # Plot 3: Gradient and Penalties vs Epoch 
-    try:
-        # Set encoder and penalty keys based on model type
-        if model_type == "3C":
-            encoder_keys = ['Dpar', 'Dmv', 'Dint', 'Fmv', 'Fint']
-            penalty_keys = ['mse_loss', 'order_penalty', 'fmv_penalty', 'fint_penalty',
-                            'ftotal_penalty', 'mag_penalty']
-        elif model_type == "2C":
-            encoder_keys = ['Dpar', 'Dmv', 'Fmv']
-            penalty_keys = ['mse_loss', 'fmv_penalty', 'mag_penalty']
-        else:
-            raise ValueError(f"[ERROR] Unknown model type: {model_type}")
-
-        # Dedicated color map (model-type aware)
-        penalty_color_map = {
-            'mse_loss': 'black',
-            'order_penalty': 'orange',
-            'fmv_penalty': 'blue',
-            'fint_penalty': 'green',
-            'ftotal_penalty': 'red',
-            'mag_penalty': 'magenta',
-            'f_penalty': 'dodgerblue',
-        }
-
-        fig, axes = plt.subplots(len(encoder_keys), 1, figsize=(12, 8 * len(encoder_keys)), sharex=True)
-
-        # Support single axis case
-        if len(encoder_keys) == 1:
-            axes = [axes]
-
-        # Detect phase changes
-        if 'phase' in penalty_df.columns:
-            vlines = penalty_df['epoch'][penalty_df['phase'].diff().fillna(0) != 0].tolist()
-            vlabels = [f"Phase {int(p)}" for p in penalty_df['phase'][penalty_df['phase'].diff().fillna(0) != 0]]
-        else:
-            vlines, vlabels = [], []
-
-        for i, key in enumerate(encoder_keys):
-            ax = axes[i]
-            grad_key = f"{key}_grad"
-
-            if grad_key in grad_df.columns:
-                ax.plot(grad_df['epoch'], grad_df[grad_key], label=grad_key, color='black', linewidth=2)
-
-            for pkey in penalty_keys:
-                if pkey in penalty_df.columns:
-                    color = penalty_color_map.get(pkey, 'gray')
-                    ax.plot(
-                        penalty_df['epoch'],
-                        penalty_df[pkey],
-                        label=pkey,
-                        color=color,
-                        linestyle='--',
-                        linewidth=1.5
-                    )
-
-            # Add phase change markers
-            for x, label in zip(vlines, vlabels):
-                ax.axvline(x=x, color='gray', linestyle=':', linewidth=1)
-                ax.text(x, ax.get_ylim()[1] * 0.8, label, rotation=90, va='top', fontsize=8, color='gray')
-
-            ax.set_yscale("log")
-            ax.set_ylabel("Log-Scaled Value")
-            ax.set_title(f"{key} — Gradient and Penalties vs Epoch")
-            ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5), fontsize='x-small')
-            ax.grid(True)
-
-        axes[-1].set_xlabel("Epoch")
-        fig.tight_layout(pad=1.0)
-        fig.subplots_adjust(hspace=0.4)
-        fig.subplots_adjust(right=0.8)
-        save_path = os.path.join(save_dir, f"grad_penalty_vs_epoch_{mode_tag}.png")
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"[SAVED] Gradient + Penalty vs Epoch plot: {save_path}")
-
-    except Exception as e:
-        print(f"[WARNING] Failed to generate Gradient + Penalty vs Epoch plot: {e}")
-
-
-    # Plot 4: Gradient vs Penalty (scatter + linear fit)
+    # Plot 3: Gradient vs Penalty (scatter + linear fit)
     try:
         merged_df = pd.merge(grad_df, penalty_df, on='epoch', suffixes=('_grad', '_penalty'))
 
@@ -1874,87 +1875,40 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         print(f"[WARNING] Failed to generate Gradient vs Penalty scatter plot: {e}")
 
 
-    # Plot 5: training and validation history
+    # Plot 4: Final Training and Validation Loss with Phase Transitions
     if debug == 1 and 'loss_log' in locals():
         df_loss = pd.DataFrame(loss_log)
 
+        # Get phase transitions
+        phase_transitions = df_loss[df_loss["phase"].diff().fillna(0) != 0]
+        vlines = phase_transitions["epoch"].tolist()
+        vlabels = [f"Phase {int(p)}" for p in phase_transitions["phase"]]
+
+        # Start plot
         plt.figure(figsize=(10, 6))
-        plt.plot(df_loss["epoch"], df_loss["train_loss"], '--', color='blue', label="Train Loss")
-        plt.plot(df_loss["epoch"], df_loss["val_loss"], '--', color='orange', label="Val Loss")
+        plt.plot(df_loss["epoch"], df_loss["train_loss"], label="Train Loss", linestyle='-', marker='o', markersize=3)
+        plt.plot(df_loss["epoch"], df_loss["val_loss"], label="Val Loss", linestyle='-', marker='s', markersize=3)
 
-        # Add vertical lines at phase transitions
-        for phase_change in df_loss[df_loss["phase"].diff().fillna(0) != 0]["epoch"]:
-            plt.axvline(phase_change, color='gray', linestyle='--', alpha=0.5)
+        # Add vertical phase lines with labels
+        ymax = max(df_loss["train_loss"].max(), df_loss["val_loss"].max())
+        for x, label in zip(vlines, vlabels):
+            plt.axvline(x=x, linestyle='--', color='gray', alpha=0.6)
+            plt.text(x + 0.2, ymax * 0.95, label, color='gray', fontsize=9, rotation=90, va='top')
 
+        # Formatting
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
-        plt.title(f"Training and Validation Loss over Epochs (tissue: {tissue_type})")
-        plt.legend()
+        plt.title(f"Training vs Validation Loss Over Epochs\nMode: {mode_tag}, Tissue: {tissue_type}")
+        plt.legend(loc='center right', bbox_to_anchor=(1.02, 0.5))
         plt.grid(True)
+        plt.tight_layout()
 
-        output_dir = arg.train_pars.dest_dir
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Include tissue in filename to prevent overwrite
-        loss_plot_path = os.path.join(save_dir, f"TrainingLossCurve_{mode_tag}.png")
-        plt.savefig(loss_plot_path)
-        print(f"[DEBUG] Saved loss curve to: {loss_plot_path}")
+        # Save plot
+        save_path = os.path.join(arg.train_pars.dest_dir, f"{mode_tag}_loss_curve.png")
+        plt.savefig(save_path, dpi=150)
+        print(f"[SAVED] Loss curve with phase lines: {save_path}")
         plt.close()
 
-
-    print(f"Final Scaling Factor: {net.scaling_factor.data}")
-    # Get loss lists
-    train_losses = loss_train
-    val_losses = loss_val
-    epochs = list(range(1, len(train_losses) + 1))
-
-    # Detect phase changes from penalty_df
-    if 'phase' in penalty_df.columns:
-        phase_change_mask = penalty_df['phase'].diff().fillna(0) != 0
-        vlines = penalty_df['epoch'][phase_change_mask].tolist()
-        vlabels = [f"Phase {int(p)}" for p in penalty_df['phase'][phase_change_mask]]
-    else:
-        vlines, vlabels = [], []
-
-    # Plotting
-    plt.figure(figsize=(10, 6))
-    plt.plot(epochs, train_losses, label="Training Loss", linestyle='-', marker='o', markersize=3)
-    plt.plot(epochs, val_losses, label="Validation Loss", linestyle='-', marker='s', markersize=3)
-
-    # Add vertical phase lines
-    for i, (x, label) in enumerate(zip(vlines, vlabels)):
-        plt.axvline(x=x, linestyle='--', color='gray', alpha=0.6)
-        plt.text(x + 0.2, max(max(train_losses), max(val_losses)) * 0.9,
-                 label, color='gray', fontsize=9, rotation=90)
-
-    # Labels and formatting
-    plt.xlabel("Epochs")
-    plt.ylabel("Loss")
-    plt.title(f"Training vs Validation Loss Over Epochs\nMode: {mode_tag}")
-    plt.legend(loc='center right', bbox_to_anchor=(1.02, 0.5))
-    plt.grid(True)
-    plt.tight_layout()
-
-    # Save plot
-    save_path = os.path.join(arg.train_pars.dest_dir, f"{mode_tag}_loss_curve.png")
-    plt.savefig(save_path, dpi=150)
-    print(f"[SAVED] Loss curve with phase lines: {save_path}")
-
-    # Show
-    plt.show()
-
-         
-    # save final fits
-    #if arg.fig:
-    #    if not os.path.isdir('plots'):
-    #        os.makedirs('plots')
-    #    plt.figure(1)
-    #    plt.gcf()
-    #    plt.savefig('plots/{name}_fig_fit.png'.format(name=arg.save_name))
-    #    plt.figure(2)
-    #    plt.gcf()
-    #    plt.savefig('plots/{name}_fig_train.png'.format(name=arg.save_name))
-    #    plt.close('all')
     # Restore best model
     if arg.train_pars.select_best:
         net.load_state_dict(final_model, strict=False)
@@ -2262,7 +2216,7 @@ def checkarg_net_pars(arg):
         if not hasattr(arg, 'use_three_compartment') or not hasattr(arg, 'tissue_type'):
             raise ValueError("[checkarg_net_pars] Missing required inputs: use_three_compartment and tissue_type")
         
-        precise_net_pars = net_pars(
+        precise_net_pars = net_pars_backup(
             model_type=arg.model_type,
             tissue_type=arg.tissue_type
             )
@@ -2310,14 +2264,15 @@ def checkarg(arg):
         warnings.warn('arg.save_name not defined. Defaulting to "brain3_mixed"')
         arg.save_name = 'brain3_mixed'
 
-    # Build net_pars first, which sets profile, use_three_compartment, and tissue_type
-    if not hasattr(arg, 'net_pars'):
-        warnings.warn(f'arg.net_pars not defined. Using net_pars(profile="{arg.save_name}")')
-        arg.net_pars = net_pars(profile=arg.save_name)
 
     # Sync use_three_compartment and tissue_type from net_pars
     if not hasattr(arg, 'use_three_compartment'):
         arg.use_three_compartment = arg.net_pars.use_three_compartment
+
+    # Build net_pars first, which sets profile, use_three_compartment, and tissue_type
+    if not hasattr(arg, 'net_pars'):
+        warnings.warn(f'arg.net_pars not defined. Using net_pars(profile="{arg.save_name}")')
+        arg.net_pars = net_pars_backup(use_three_compartment=arg.use_three_compartment, tissue_type="mixed")
 
     if not hasattr(arg, 'tissue_type'):
         arg.tissue_type = arg.net_pars.tissue_type if hasattr(arg.net_pars, 'tissue_type') else 'mixed'
@@ -2325,7 +2280,7 @@ def checkarg(arg):
     # Training Parameters
     if not hasattr(arg, 'train_pars'):
         warnings.warn(f'arg.train_pars not defined. Using train_pars(profile="{arg.save_name}")')
-        arg.train_pars = train_pars(arg.save_name)
+        arg.train_pars = train_pars_backup(arg.save_name)
 
     # Fit Method 
     if not hasattr(arg, 'fit'):
@@ -2358,7 +2313,7 @@ def checkarg(arg):
 
 
 
-class train_pars:
+class train_pars_backup:
     def __init__(self,nets):
         self.optim='adam' #these are the optimisers implementd. Choices are: 'sgd'; 'sgdr'; 'adagrad' adam
         self.lr = 0.00005 # this is the learning rate.
@@ -2376,7 +2331,7 @@ class train_pars:
         self.select_best = False
 
 
-class net_pars:
+class net_pars_backup:
     def __init__(self, use_three_compartment=True, tissue_type="mixed"):
         self.tissue_type = tissue_type
         self.use_three_compartment = use_three_compartment
