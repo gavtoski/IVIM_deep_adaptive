@@ -587,7 +587,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
         # ------------------------------------------------------
         # Compute total loss
         # ------------------------------------------------------
-        penalty_scale = 0.1
+        penalty_scale = 0.3
         scaled_constraint_loss = (order_term + fmv_term + mag_term) * penalty_scale
         total_loss = mse_loss + scaled_constraint_loss
 
@@ -719,7 +719,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
         #-----------------------------
         # Return loss and breakdown
         #-----------------------------
-        penalty_scale = 0.1
+        penalty_scale = 0.3
         scaled_constraint_loss = (
             0.2 * order_term +
             0.1 * fmv_term +
@@ -1103,8 +1103,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                 optimizer.step()
 
-
-
                 with torch.no_grad():
                     net.scaling_factor.clamp_(0, 1)
                 running_loss_train += loss.item()
@@ -1186,86 +1184,87 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 num_bad_epochs += 1
             fine_tune_phase_epoch_counter += 1
 
-                # Phase tuning start here
-                # Trigger phase change either by patience or by phase duration cap
-                # Check if it's time to switch phase: patience OR max_epochs_per_phase
-                switch_phase = False
-                if num_bad_epochs == arg.train_pars.patience:
-                    switch_phase = True
-                #elif fine_tune_phase == 1 and fine_tune_phase_epoch_counter >= (max_epochs_per_phase + 5):
-                #    print(f"[PHASE 1] Exceeded max_epochs_per_phase + 5 buffer. Forcing phase switch.")
-                #    num_bad_epochs = arg.train_pars.patience
-                #    switch_phase = True
-                elif fine_tune_phase_epoch_counter >= max_epochs_per_phase:
-                    print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
-                    num_bad_epochs = arg.train_pars.patience
-                    switch_phase = True
+            #---------------------------
+            # Phase tuning start here
+            #---------------------------
+            switch_phase = False
+            if num_bad_epochs == arg.train_pars.patience:
+                switch_phase = True
 
-                # Handle the switch
-                if switch_phase:
+            elif fine_tune_phase_epoch_counter >= max_epochs_per_phase:
+                print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
+                num_bad_epochs = arg.train_pars.patience
+                switch_phase = True
+
+            # Handle the switch
+            if switch_phase:
+                if fine_tune_master_enable:
                     if fine_tune_master_enable:
-                        if fine_tune_master_enable:
 
-                            if fine_tune_phase == 1:
-                                print("[PHASE 2] Tuning Dpar...")
+                        if fine_tune_phase == 1:
+                            print("[PHASE 2] Tuning Dpar...")
 
-                                net.load_state_dict(final_model, strict=False)
-                                fine_tune_phase = 2
-                                fine_tune_phase_epoch_counter = 0 # only tune phase 2 for a short time
-                                num_bad_epochs = 0
-                                arg.train_pars.patience = 5
-                                set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
+                            net.load_state_dict(final_model, strict=False)
+                            fine_tune_phase = 2
+                            fine_tune_phase_epoch_counter = 0 # only tune phase 2 for a short time
+                            num_bad_epochs = 0
+                            arg.train_pars.patience = 5
+                            set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
 
-                                #Update padfrac
-                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                net.update_clipping_constraints(
-                                    tissue_type=tissue_type,  # from learn_IVIM() args
-                                    pad_fraction=pad_frac
-                                    )
+                            #Update padfrac
+                            pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                            net.update_clipping_constraints(
+                                tissue_type=tissue_type,  # from learn_IVIM() args
+                                pad_fraction=pad_frac
+                                )
 
-                                print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
-
-
-                            elif fine_tune_phase == 2:
-                                #if not use_three_compartment:
-                                #    print("[SKIP] Phase 3 skipped for 2C model.")
-                                #    break
-
-                                print("[PHASE 3] Tuning Dmv...")
-
-                                net.load_state_dict(final_model, strict=False)
-                                fine_tune_phase = 3
-                                fine_tune_phase_epoch_counter = 0
-                                num_bad_epochs = 0
-                                arg.train_pars.patience = 5
-                                set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
-
-                                #Update padfrac
-                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                net.update_clipping_constraints(
-                                    tissue_type=tissue_type,  # from learn_IVIM() args
-                                    pad_fraction=pad_frac
-                                    )
-
-                                print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
+                            print(f"Constraint padding updated to {pad_frac}")
+                            print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                            print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
-                            elif fine_tune_phase == 3:
-                                print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")
-                                break
+                        elif fine_tune_phase == 2:
+                            #if not use_three_compartment:
+                            #    print("[SKIP] Phase 3 skipped for 2C model.")
+                            #    break
 
-                        else:
-                            print("[FINE-TUNE OFF] Finetune is turned off. Skip phase training.")
+                            print("[PHASE 3] Tuning Dmv...")
+
+                            net.load_state_dict(final_model, strict=False)
+                            fine_tune_phase = 3
+                            fine_tune_phase_epoch_counter = 0
+                            num_bad_epochs = 0
+                            arg.train_pars.patience = 5
+                            set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
+
+                            #Update padfrac
+                            pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                            net.update_clipping_constraints(
+                                tissue_type=tissue_type,  # from learn_IVIM() args
+                                pad_fraction=pad_frac
+                                )
+
+                            print(f"Constraint padding updated to {pad_frac}")
+                            print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                            print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
+
+
+                        elif fine_tune_phase == 3:
+                            print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")
                             break
 
                     else:
-                        print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
+                        print("[FINE-TUNE OFF] Finetune is turned off. Skip phase training.")
                         break
-                
+
+                else:
+                    print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
+                    break
+            
+            #---------------------
+            # Phase tuning ends 
+            #---------------------
+
 
             # plot loss and plot 4 fitted curves
             if epoch > 0:
@@ -1464,83 +1463,85 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 num_bad_epochs += 1
             fine_tune_phase_epoch_counter += 1
 
-                #Fine tuning start here
-                # Check if it's time to switch phase: patience OR max_epochs_per_phase
-                switch_phase = False
-                if num_bad_epochs == arg.train_pars.patience:
-                    switch_phase = True
-                #elif fine_tune_phase == 1 and fine_tune_phase_epoch_counter >= (max_epochs_per_phase + 5):
-                #    print(f"[PHASE 1] Exceeded max_epochs_per_phase + 5 buffer. Forcing phase switch.")
-                #    num_bad_epochs = arg.train_pars.patience
-                #    switch_phase = True
-                elif fine_tune_phase_epoch_counter >= max_epochs_per_phase:
-                    print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
-                    num_bad_epochs = arg.train_pars.patience
-                    switch_phase = True
+            #---------------------------
+            # Phase tuning start here
+            #---------------------------
+            # Check if it's time to switch phase: patience OR max_epochs_per_phase
+            switch_phase = False
+            if num_bad_epochs == arg.train_pars.patience:
+                switch_phase = True
+    
+            elif fine_tune_phase_epoch_counter >= max_epochs_per_phase:
+                print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
+                num_bad_epochs = arg.train_pars.patience
+                switch_phase = True
 
-                # Handle the switch
-                if switch_phase:
+            # Handle the switch
+            if switch_phase:
+                if fine_tune_master_enable:
                     if fine_tune_master_enable:
-                        if fine_tune_master_enable:
 
-                            if fine_tune_phase == 1:
-                                print("[PHASE 2] Tuning Dpar...")
+                        if fine_tune_phase == 1:
+                            print("[PHASE 2] Tuning Dpar...")
 
-                                net.load_state_dict(final_model, strict=False)
-                                fine_tune_phase = 2
-                                fine_tune_phase_epoch_counter = 5
-                                num_bad_epochs = 0
-                                arg.train_pars.patience = 3
-                                set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
+                            net.load_state_dict(final_model, strict=False)
+                            fine_tune_phase = 2
+                            fine_tune_phase_epoch_counter = 5
+                            num_bad_epochs = 0
+                            arg.train_pars.patience = 3
+                            set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
 
-                                #Update padfrac
-                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                net.update_clipping_constraints(
-                                    tissue_type=tissue_type,  # from learn_IVIM() args
-                                    pad_fraction=pad_frac
-                                    )
+                            #Update padfrac
+                            pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                            net.update_clipping_constraints(
+                                tissue_type=tissue_type,  # from learn_IVIM() args
+                                pad_fraction=pad_frac
+                                )
 
-                                print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
-
-
-                            elif fine_tune_phase == 2:
-                                #if not use_three_compartment:
-                                #    print("[SKIP] Phase 3 skipped for 2C model.")
-                                #    break
-
-                                print("[PHASE 3] Tuning Dmv...")
-                                net.load_state_dict(final_model, strict=False)
-                                fine_tune_phase = 3
-                                fine_tune_phase_epoch_counter = 5
-                                num_bad_epochs = 0
-                                arg.train_pars.patience = 3
-                                set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
-
-                                #Update padfrac
-                                pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-                                net.update_clipping_constraints(
-                                    tissue_type=tissue_type,  # from learn_IVIM() args
-                                    pad_fraction=pad_frac
-                                    )
-
-                                print(f"Constraint padding updated to {pad_frac}")
-                                print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-                                print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
+                            print(f"Constraint padding updated to {pad_frac}")
+                            print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                            print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
-                            elif fine_tune_phase == 3:
-                                print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")
-                                break
+                        elif fine_tune_phase == 2:
+                            #if not use_three_compartment:
+                            #    print("[SKIP] Phase 3 skipped for 2C model.")
+                            #    break
 
-                        else:
-                            print("[FINE-TUNE OFF] Finetune is turned off. Skip phase training.")
+                            print("[PHASE 3] Tuning Dmv...")
+                            net.load_state_dict(final_model, strict=False)
+                            fine_tune_phase = 3
+                            fine_tune_phase_epoch_counter = 5
+                            num_bad_epochs = 0
+                            arg.train_pars.patience = 3
+                            set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
+
+                            #Update padfrac
+                            pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+                            net.update_clipping_constraints(
+                                tissue_type=tissue_type,  # from learn_IVIM() args
+                                pad_fraction=pad_frac
+                                )
+
+                            print(f"Constraint padding updated to {pad_frac}")
+                            print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
+                            print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
+
+
+                        elif fine_tune_phase == 3:
+                            print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")
                             break
-                    else:
-                        print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
-                        break
 
+                    else:
+                        print("[FINE-TUNE OFF] Finetune is turned off. Skip phase training.")
+                        break
+                else:
+                    print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
+                    break
+
+            #---------------------
+            # Phase tuning ends
+            #---------------------
 
             if loss_components is not None:
                 penalty_log_list.append({
@@ -1904,7 +1905,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         plt.tight_layout()
 
         # Save plot
-        save_path = os.path.join(arg.train_pars.dest_dir, f"{mode_tag}_loss_curve.png")
+        save_path = os.path.join(save_dir, f"{mode_tag}_loss_curve.png")
         plt.savefig(save_path, dpi=150)
         print(f"[SAVED] Loss curve with phase lines: {save_path}")
         plt.close()

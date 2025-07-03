@@ -146,6 +146,7 @@ class map_generator_NN():
 		    self.boost_toggle = False
 		    self.ablate_option = "none"
 
+		#Careful with deep or deep2
 		self.net = deep2.learn_IVIM(self.datatot[res], self.bvalues, self.arg,
 							original_mode=self.original_mode,
 							weight_tuning=self.weight_tuning,
@@ -341,7 +342,7 @@ class map_generator_NN():
 		# Run inference
 		start_time = time.time()
 
-		# Always use deep2.predict_IVIM now
+		# Use deep or deep2 depending on original mode
 		paramsNN = deep2.predict_IVIM(self.datatot, self.bvalues, self.net, self.arg)
 
 		elapsed_time1netinf = time.time() - start_time
