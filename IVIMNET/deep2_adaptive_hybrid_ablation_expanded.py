@@ -506,13 +506,13 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
     #---------------------
     # Calculating mse loss
     #---------------------
-    if model.original_mode:
+    if model.original_mode and phase == 1:
         mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
         if debug == 1:
             return mse_loss, {'mse_loss': mse_loss} 
         return mse_loss
 
-    if not model.original_mode and phase >= 1:
+    if not model.original_mode and phase > 1:
 
         # Apply bval mask always (both train + val)
         if hasattr(model, 'bval_mask') and model.bval_mask is not None:
@@ -617,13 +617,13 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
     #---------------------
     # Calculating mse loss
     #---------------------
-    if model.original_mode:
+    if model.original_mode and phase == 1:
         mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
         if debug == 1:
             return mse_loss, {'mse_loss': mse_loss} 
         return mse_loss
 
-    if not model.original_mode and phase >= 1:
+    if not model.original_mode and phase > 1:
 
         # Apply bval mask always (train + val)
         if hasattr(model, 'bval_mask') and model.bval_mask is not None:
@@ -963,20 +963,26 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
         elif phase == 2:
             for name, param in net.named_parameters():
-                param.requires_grad = True
-                net.encoder_soft_weights[name] = 0.1  # global downscale
+                if 'encoder0' in name or 'encoder2' in name:
+                    net.encoder_soft_weights[name] = 0.01  # Dmv, Fmv
+                elif 'encoder1' in name:
+                    net.encoder_soft_weights[name] = 0.03  # Dpar
+                elif net.use_three_compartment and 'encoder3' in name:
+                    net.encoder_soft_weights[name] = 0.01  # Dint
+                elif net.use_three_compartment and 'encoder4' in name:
+                    net.encoder_soft_weights[name] = 0.01  # Fint
             print("[PHASE 2] Tuning Dpar very slowly — all gradients downscaled.")
 
         elif phase == 3:
             for name, param in net.named_parameters():
                 if 'encoder0' in name or 'encoder2' in name:
-                    net.encoder_soft_weights[name] = 0.3  # Dmv, Fmv
+                    net.encoder_soft_weights[name] = 0.03  # Dmv, Fmv
                 elif 'encoder1' in name:
-                    net.encoder_soft_weights[name] = 0.1  # Dpar
+                    net.encoder_soft_weights[name] = 0.01  # Dpar
                 elif net.use_three_compartment and 'encoder3' in name:
-                    net.encoder_soft_weights[name] = 0.1  # Dint
+                    net.encoder_soft_weights[name] = 0.01  # Dint
                 elif net.use_three_compartment and 'encoder4' in name:
-                    net.encoder_soft_weights[name] = 0.1  # Fint
+                    net.encoder_soft_weights[name] = 0.01  # Fint
 
             print("[PHASE 3] Focusing on Dmv, Fmv, Dint, Fint — soft update")
 
@@ -1880,10 +1886,17 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     if debug == 1 and 'loss_log' in locals():
         df_loss = pd.DataFrame(loss_log)
 
-        # Get phase transitions
-        phase_transitions = df_loss[df_loss["phase"].diff().fillna(0) != 0]
-        vlines = phase_transitions["epoch"].tolist()
-        vlabels = [f"Phase {int(p)}" for p in phase_transitions["phase"]]
+        # Merge phase info from penalty_df if missing
+        if 'phase' not in df_loss.columns and 'epoch' in df_loss.columns and 'epoch' in penalty_df.columns:
+            df_loss = pd.merge(df_loss, penalty_df[['epoch', 'phase']], on='epoch', how='left')
+
+        # Identify phase transitions
+        if 'phase' in df_loss.columns:
+            phase_transitions = df_loss[df_loss["phase"].diff().fillna(0) != 0]
+            vlines = phase_transitions["epoch"].tolist()
+            vlabels = [f"Phase {int(p)}" for p in phase_transitions["phase"]]
+        else:
+            vlines, vlabels = [], []
 
         # Start plot
         plt.figure(figsize=(10, 6))
@@ -1909,6 +1922,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         plt.savefig(save_path, dpi=150)
         print(f"[SAVED] Loss curve with phase lines: {save_path}")
         plt.close()
+
 
     # Restore best model
     if arg.train_pars.select_best:
