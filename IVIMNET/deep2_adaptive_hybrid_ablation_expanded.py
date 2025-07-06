@@ -1215,7 +1215,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             fine_tune_phase_epoch_counter = 0 # only tune phase 2 for a short time
                             num_bad_epochs = 0
                             arg.train_pars.patience = 5
-                            set_fine_tune_phase(net, bvalues, 2, (0, 100), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 2, (0, 1000), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1241,7 +1241,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             fine_tune_phase_epoch_counter = 0
                             num_bad_epochs = 0
                             arg.train_pars.patience = 5
-                            set_fine_tune_phase(net, bvalues, 3, (100, 1000), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 3, (0, 1000), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1497,7 +1497,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             fine_tune_phase_epoch_counter = 5
                             num_bad_epochs = 0
                             arg.train_pars.patience = 3
-                            set_fine_tune_phase(net, bvalues, 2, (0, 100), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 2, (0, 1000), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1522,7 +1522,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             fine_tune_phase_epoch_counter = 5
                             num_bad_epochs = 0
                             arg.train_pars.patience = 3
-                            set_fine_tune_phase(net, bvalues, 3, (100, 1000), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 3, (0, 1000), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1561,7 +1561,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
             # Plot training progress
             loss_log.append({
                 "epoch": epoch + 1,
-                "phase": getattr(net, 'fine_tune_phase', 1),
+                "phase": fine_tune_phase,
                 "train_loss": running_loss_train,
                 "val_loss": running_loss_val
             })
