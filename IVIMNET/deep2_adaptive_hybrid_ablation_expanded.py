@@ -506,7 +506,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
     #---------------------
     # Calculating mse loss
     #---------------------
-    if model.original_mode and phase == 1:
+    if model.original_mode or phase == 1:
         mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
         if debug == 1:
             return mse_loss, {'mse_loss': mse_loss} 
@@ -617,7 +617,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
     #---------------------
     # Calculating mse loss
     #---------------------
-    if model.original_mode and phase == 1:
+    if model.original_mode or phase == 1:
         mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
         if debug == 1:
             return mse_loss, {'mse_loss': mse_loss} 
