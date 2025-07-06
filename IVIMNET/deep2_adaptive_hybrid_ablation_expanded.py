@@ -515,7 +515,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
     if not model.original_mode and phase > 1:
 
         # Apply bval mask always (both train + val)
-        if hasattr(model, 'bval_mask') and model.bval_mask is not None:
+        if  model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
             X_batch = X_batch[:, model.bval_mask]
             if X_pred.shape[1] != X_batch.shape[1]:
                 X_pred = X_pred[:, model.bval_mask]
@@ -587,7 +587,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
         # ------------------------------------------------------
         # Compute total loss
         # ------------------------------------------------------
-        penalty_scale = 0.3
+        penalty_scale = mse_loss.detach()
         scaled_constraint_loss = (order_term + fmv_term + mag_term) * penalty_scale
         total_loss = mse_loss + scaled_constraint_loss
 
@@ -626,7 +626,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
     if not model.original_mode and phase > 1:
 
         # Apply bval mask always (train + val)
-        if hasattr(model, 'bval_mask') and model.bval_mask is not None:
+        if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
             X_batch = X_batch[:, model.bval_mask]
             if X_pred.shape[1] != X_batch.shape[1]:
                 X_pred = X_pred[:, model.bval_mask]
@@ -719,13 +719,13 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
         #-----------------------------
         # Return loss and breakdown
         #-----------------------------
-        penalty_scale = 0.3
+        penalty_scale = mse_loss.detach()
         scaled_constraint_loss = (
-            0.2 * order_term +
-            0.1 * fmv_term +
-            0.5 * fint_term +
-            0.8 * mag_term +
-            1.0 * ftotal_term
+            order_term +
+            fmv_term +
+            fint_term +
+            mag_term +
+            ftotal_term
         ) * penalty_scale
 
         total_loss = mse_loss + scaled_constraint_loss
@@ -964,18 +964,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         elif phase == 2:
             for name, param in net.named_parameters():
                 if 'encoder0' in name or 'encoder2' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dmv, Fmv
-                elif 'encoder1' in name:
-                    net.encoder_soft_weights[name] = 0.03  # Dpar
-                elif net.use_three_compartment and 'encoder3' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dint
-                elif net.use_three_compartment and 'encoder4' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Fint
-            print("[PHASE 2] Tuning Dpar very slowly — all gradients downscaled.")
-
-        elif phase == 3:
-            for name, param in net.named_parameters():
-                if 'encoder0' in name or 'encoder2' in name:
                     net.encoder_soft_weights[name] = 0.03  # Dmv, Fmv
                 elif 'encoder1' in name:
                     net.encoder_soft_weights[name] = 0.01  # Dpar
@@ -983,8 +971,20 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                     net.encoder_soft_weights[name] = 0.01  # Dint
                 elif net.use_three_compartment and 'encoder4' in name:
                     net.encoder_soft_weights[name] = 0.01  # Fint
+            print("[PHASE 2] Focusing on Dmv, Fmv, Dint, Fint — soft update")
 
-            print("[PHASE 3] Focusing on Dmv, Fmv, Dint, Fint — soft update")
+        elif phase == 3:
+            for name, param in net.named_parameters():
+                if 'encoder0' in name or 'encoder2' in name:
+                    net.encoder_soft_weights[name] = 0.01  # Dmv, Fmv
+                elif 'encoder1' in name:
+                    net.encoder_soft_weights[name] = 0.015  # Dpar
+                elif net.use_three_compartment and 'encoder3' in name:
+                    net.encoder_soft_weights[name] = 0.012  # Dint
+                elif net.use_three_compartment and 'encoder4' in name:
+                    net.encoder_soft_weights[name] = 0.012  # Fint
+
+            print("[PHASE 3] Focusing on Dpar and finally signal tuning")
 
 
         elif phase == 4:
@@ -1208,14 +1208,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                     if fine_tune_master_enable:
 
                         if fine_tune_phase == 1:
-                            print("[PHASE 2] Tuning Dpar...")
+                            print("[PHASE 2] Tuning Dmv and Dint...")
 
                             net.load_state_dict(final_model, strict=False)
                             fine_tune_phase = 2
                             fine_tune_phase_epoch_counter = 0 # only tune phase 2 for a short time
                             num_bad_epochs = 0
                             arg.train_pars.patience = 5
-                            set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 2, (0, 100), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1234,14 +1234,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             #    print("[SKIP] Phase 3 skipped for 2C model.")
                             #    break
 
-                            print("[PHASE 3] Tuning Dmv...")
+                            print("[PHASE 3] Tuning Dpar and signal...")
 
                             net.load_state_dict(final_model, strict=False)
                             fine_tune_phase = 3
                             fine_tune_phase_epoch_counter = 0
                             num_bad_epochs = 0
                             arg.train_pars.patience = 5
-                            set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 3, (100, 1000), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1291,7 +1291,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 "epoch": epoch + 1,
                 "phase": getattr(net, 'fine_tune_phase', 1),
                 "train_loss": running_loss_train,
-                "val_loss": running_loss_val
+                "val_loss": running_loss_val,
+                "phase": net.fine_tune_phase  
+
             }) # Collect plots over training
 
     #------------------------------------------------------
@@ -1488,14 +1490,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                     if fine_tune_master_enable:
 
                         if fine_tune_phase == 1:
-                            print("[PHASE 2] Tuning Dpar...")
+                            print("[PHASE 2] Tuning Dmv and Dint(3C only)...")
 
                             net.load_state_dict(final_model, strict=False)
                             fine_tune_phase = 2
                             fine_tune_phase_epoch_counter = 5
                             num_bad_epochs = 0
                             arg.train_pars.patience = 3
-                            set_fine_tune_phase(net, bvalues, 2, (100, 1000), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 2, (0, 100), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1514,13 +1516,13 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             #    print("[SKIP] Phase 3 skipped for 2C model.")
                             #    break
 
-                            print("[PHASE 3] Tuning Dmv...")
+                            print("[PHASE 3] Tuning Dpar...")
                             net.load_state_dict(final_model, strict=False)
                             fine_tune_phase = 3
                             fine_tune_phase_epoch_counter = 5
                             num_bad_epochs = 0
                             arg.train_pars.patience = 3
-                            set_fine_tune_phase(net, bvalues, 3, (0, 100), arg.train_pars.device)
+                            set_fine_tune_phase(net, bvalues, 3, (100, 1000), arg.train_pars.device)
 
                             #Update padfrac
                             pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
@@ -1885,10 +1887,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     # Plot 4: Final Training and Validation Loss with Phase Transitions
     if debug == 1 and 'loss_log' in locals():
         df_loss = pd.DataFrame(loss_log)
-
-        # Merge phase info from penalty_df if missing
-        if 'phase' not in df_loss.columns and 'epoch' in df_loss.columns and 'epoch' in penalty_df.columns:
-            df_loss = pd.merge(df_loss, penalty_df[['epoch', 'phase']], on='epoch', how='left')
 
         # Identify phase transitions
         if 'phase' in df_loss.columns:
