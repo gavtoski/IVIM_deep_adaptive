@@ -514,7 +514,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 
     if not model.original_mode and phase > 1:
 
-        # Apply bval mask always (both train + val)
+        # Apply bval mask always (train only)
         if  model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
             X_batch = X_batch[:, model.bval_mask]
             if X_pred.shape[1] != X_batch.shape[1]:
@@ -523,7 +523,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
         # Weighted MSE loss
         if getattr(model, 'weight_tuning', False):
             weights = model.bval_weights.to(X_batch.device)
-            if hasattr(model, 'bval_mask') and model.bval_mask is not None:
+            if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
                 weights = weights[model.bval_mask]
             weights = weights.view(1, -1)
             weights = weights / weights.mean()
@@ -625,7 +625,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
 
     if not model.original_mode and phase > 1:
 
-        # Apply bval mask always (train + val)
+        # Apply bval mask  (train only)
         if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
             X_batch = X_batch[:, model.bval_mask]
             if X_pred.shape[1] != X_batch.shape[1]:
@@ -634,7 +634,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
         # Weighted MSE loss
         if getattr(model, 'weight_tuning', False):
             weights = model.bval_weights.to(X_batch.device)
-            if hasattr(model, 'bval_mask'):
+            if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
                 weights = weights[model.bval_mask]
             weights = weights.view(1, -1)
             weights = weights / weights.mean()
