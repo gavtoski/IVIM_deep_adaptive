@@ -521,7 +521,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
                 X_pred = X_pred[:, model.bval_mask]
 
         # Weighted MSE loss
-        if getattr(model, 'weight_tuning', False):
+        if model.training and getattr(model, 'weight_tuning', False):
             weights = model.bval_weights.to(X_batch.device)
             if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
                 weights = weights[model.bval_mask]
@@ -532,7 +532,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
             mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
 
         # Optional phase-based MSE boost
-        if boost_mse_by_phase:
+        if model.training and boost_mse_by_phase:
             boost_factor = {1: 1.0, 2: 1.0, 3: 1.05, 4: 1.05}.get(phase, 1.0)
             mse_loss *= boost_factor
 
@@ -632,7 +632,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
                 X_pred = X_pred[:, model.bval_mask]
 
         # Weighted MSE loss
-        if getattr(model, 'weight_tuning', False):
+        if model.training and getattr(model, 'weight_tuning', False):
             weights = model.bval_weights.to(X_batch.device)
             if model.training and hasattr(model, 'bval_mask') and model.bval_mask is not None:
                 weights = weights[model.bval_mask]
@@ -643,7 +643,7 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
             mse_loss = nn.MSELoss(reduction='mean')(X_pred, X_batch)
 
         # Optional MSE boost by phase
-        if boost_mse_by_phase:
+        if model.training and boost_mse_by_phase:
             boost_factor = {1: 1.0, 2: 1.0, 3: 1.05, 4: 1.1}.get(phase, 1.0)
             mse_loss *= boost_factor
 
