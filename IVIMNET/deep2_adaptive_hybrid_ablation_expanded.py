@@ -124,9 +124,9 @@ class Net(nn.Module):
         if not self.original_mode:
             self.weight_tuning = True
             if self.use_three_compartment:
-                default_scaling = torch.tensor([0.1, 0.1, 0.1, 0.1, 0.1], dtype=torch.float32)  # 3C: order, fmv, fint, ftotal, magnitude
+                default_scaling = torch.tensor([1, 1, 1, 1, 1], dtype=torch.float32)  # 3C: order, fmv, fint, ftotal, magnitude
             else:
-                default_scaling = torch.tensor([0.1, 0.1, 0.1], dtype=torch.float32)  # 2C: fmv, ftotal, magnitude
+                default_scaling = torch.tensor([1, 1, 1], dtype=torch.float32)  # 2C: fmv, ftotal, magnitude
 
             if scaling_factor is not None:
                 self.scaling_factor = nn.Parameter(torch.tensor(scaling_factor, dtype=torch.float32, requires_grad=True))
@@ -964,25 +964,25 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         elif phase == 2:
             for name, param in net.named_parameters():
                 if 'encoder0' in name or 'encoder2' in name:
-                    net.encoder_soft_weights[name] = 0.03  # Dmv, Fmv
+                    net.encoder_soft_weights[name] = 0.3  # Dmv, Fmv
                 elif 'encoder1' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dpar
+                    net.encoder_soft_weights[name] = 0.1  # Dpar
                 elif net.use_three_compartment and 'encoder3' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dint
+                    net.encoder_soft_weights[name] = 0.1  # Dint
                 elif net.use_three_compartment and 'encoder4' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Fint
+                    net.encoder_soft_weights[name] = 0.1  # Fint
             print("[PHASE 2] Focusing on Dmv, Fmv, Dint, Fint — soft update")
 
         elif phase == 3:
             for name, param in net.named_parameters():
                 if 'encoder0' in name or 'encoder2' in name:
-                    net.encoder_soft_weights[name] = 0.01  # Dmv, Fmv
+                    net.encoder_soft_weights[name] = 0.05  # Dmv, Fmv
                 elif 'encoder1' in name:
-                    net.encoder_soft_weights[name] = 0.015  # Dpar
+                    net.encoder_soft_weights[name] = 0.3  # Dpar
                 elif net.use_three_compartment and 'encoder3' in name:
-                    net.encoder_soft_weights[name] = 0.012  # Dint
+                    net.encoder_soft_weights[name] = 0.15  # Dint
                 elif net.use_three_compartment and 'encoder4' in name:
-                    net.encoder_soft_weights[name] = 0.012  # Fint
+                    net.encoder_soft_weights[name] = 0.15  # Fint
 
             print("[PHASE 3] Focusing on Dpar and finally signal tuning")
 
@@ -1777,10 +1777,15 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
         # Identify phase transitions
         if 'phase' in penalty_df.columns:
-            vlines = penalty_df['epoch'][penalty_df['phase'].diff().fillna(0) != 0].tolist()
-            vlabels = [f"Phase {int(p)}" for p in penalty_df['phase'][penalty_df['phase'].diff().fillna(0) != 0]]
+            transition_mask = penalty_df['phase'].diff().fillna(0) != 0
+            phase_transitions = penalty_df[transition_mask].copy()
+
+            # shift line to match visual change
+            vlines = (phase_transitions['epoch'] + 1).tolist()
+            vlabels = [f"Phase {int(p)}" for p in phase_transitions['phase']]
         else:
             vlines, vlabels = [], []
+
 
         # Plot each component
         for col in penalty_cols:
@@ -1891,7 +1896,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         # Identify phase transitions
         if 'phase' in df_loss.columns:
             phase_transitions = df_loss[df_loss["phase"].diff().fillna(0) != 0]
-            vlines = phase_transitions["epoch"].tolist()
+            vlines = (phase_transitions["epoch"]+1).tolist()
             vlabels = [f"Phase {int(p)}" for p in phase_transitions["phase"]]
         else:
             vlines, vlabels = [], []
