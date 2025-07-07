@@ -222,22 +222,22 @@ class Net(nn.Module):
             weights[:] = 1.0
 
         elif phase == 2:
-            # Phase 2: Emphasize high-b to improve Dmv
-            weights[bvalues <= 100] = 1.1 
-            weights[bvalues < 100] = 1.0
-
-        elif phase == 3:
-            # Phase 3: Emphasize low-b to improve Dpar
-            weights[bvalues >= 100] = 1.1
+            # Phase 2: Emphasize low-b for Dmv/Fmv
+            weights[bvalues <= 100] = 1.1
             weights[bvalues > 100] = 1.0
 
+        elif phase == 3:
+            # Phase 3: Emphasize mid-to-high b for Dpar
+            weights[bvalues > 100] = 1.1
+            weights[bvalues <= 100] = 1.0
+
         elif phase == 4:
-            weights[:] = 1.0  # back to normal weight distribution
-            
-        # Normalize weights to maintain consistent loss scale
-        weights = weights / weights.mean()
+            # Phase 4: Emphasize mid-range for Dint/Fint
+            weights[(bvalues > 50) & (bvalues < 700)] = 1.1
+            weights[(bvalues <= 50) | (bvalues >= 700)] = 1.0
 
         return weights
+
 
     def update_clipping_constraints(self, tissue_type=None, model_type=None, pad_fraction=None, IR=None):
         """
@@ -902,18 +902,11 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     # Pad scaling:
     # Define schedule: (phase, pad_fraction)
     if original_mode:
-        padding_schedule = {
-        1: 0.3,   # Phase 1
-        2: 0.3,  # Phase 2
-        3: 0.3   # Phase 3
-        }
-    else:
-        padding_schedule = {
-            1: 0.5,   # Phase 1
-            2: 0.3,  # Phase 2
-            3: 0.25   # Phase 3
-        }
-
+        padding_schedule = {1: 0.3, 2: 0.3, 3: 0.3}
+    elif use_three_compartment:
+        padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
+    else:  # 2C adaptive
+        padding_schedule = {1: 1.0, 2: 0.5, 3: 0.3}
 
     if use_three_compartment:
         param_tags = {
@@ -2384,19 +2377,20 @@ class net_pars_backup:
         else:
             self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
             if tissue_type == "NAWM":
-                self.cons_min = [0.0001, 0.002, 0.000, 0.9]
+                self.cons_min = [0.0001, 0.000, 0.005, 0.9]
                 self.cons_max = [0.00080, 0.075, 0.030, 1.1]
             elif tissue_type == "WMH":
-                self.cons_min = [0.0001, 0.002, 0.000, 0.9]
+                self.cons_min = [0.0001, 0.000, 0.005, 0.9]
                 self.cons_max = [0.00080, 0.125, 0.020, 1.1]
             elif tissue_type == "mixed":
-                self.cons_min = [0.0001, 0.002, 0.000, 0.9]
-                self.cons_max = [0.00080, 0.125, 0.030, 1.1]
+                self.cons_min = [0.00005, 0.000, 0.000, 0.9]
+                self.cons_max = [0.00100, 0.150, 0.050, 1.1]
             else:
                 raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
 
+
         # Pad constraint range for sigmoid scaling
-        pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
+        pad_fraction = 0.5 if tissue_type in ["mixed", "original"] else 0.3
         range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
         self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
         self.cons_max = np.array(self.cons_max) + range_pad

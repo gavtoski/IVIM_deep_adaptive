@@ -73,14 +73,14 @@ class net_pars:
         elif model_type == "2C":
             self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
             if tissue_type == "NAWM":
-                self.cons_min = [0.0001, 0.002, 0.005, 0.9]
+                self.cons_min = [0.0001, 0.000, 0.005, 0.9]
                 self.cons_max = [0.00080, 0.075, 0.030, 1.1]
             elif tissue_type == "WMH":
-                self.cons_min = [0.0001, 0.002, 0.005, 0.9]
+                self.cons_min = [0.0001, 0.000, 0.005, 0.9]
                 self.cons_max = [0.00080, 0.125, 0.020, 1.1]
             elif tissue_type == "mixed":
-                self.cons_min = [0.0001, 0.002, 0.005, 0.9]
-                self.cons_max = [0.00090, 0.125, 0.030, 1.1]
+                self.cons_min = [0.00005, 0.000, 0.000, 0.9]
+                self.cons_max = [0.00100, 0.150, 0.050, 1.1]
             else:
                 raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
 
@@ -89,7 +89,7 @@ class net_pars:
 
         # Padded constraints
         if pad_fraction is None:
-            pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
+            pad_fraction = 0.5 if tissue_type in ["mixed", "original"] else 0.3
 
         range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
         self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
