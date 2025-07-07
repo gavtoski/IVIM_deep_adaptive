@@ -111,7 +111,7 @@ class Net(nn.Module):
             self.est_pars += 1
 
         if not self.use_three_compartment:
-            self.net_pars.depth += 1 # can try switching to 1 if you prefer but I dont think you need
+            self.net_pars.depth += 0 # can try switching to 1 if you prefer but I dont think you need
             print(f"Increased network depth for 2C model: depth = {self.net_pars.depth}") #2C tends to underfit
         
         self.freeze_param = False if original_mode else freeze_param
@@ -222,13 +222,13 @@ class Net(nn.Module):
             weights[:] = 1.0
 
         elif phase == 2:
-            # Phase 2: Emphasize high-b to improve Dpar
-            weights[bvalues >= 100] = 1.05 #lower tune since higher noise at high b-vals
+            # Phase 2: Emphasize high-b to improve Dmv
+            weights[bvalues <= 100] = 1.1 
             weights[bvalues < 100] = 1.0
 
         elif phase == 3:
-            # Phase 3: Emphasize low-b to improve Dmv
-            weights[bvalues <= 100] = 1.05
+            # Phase 3: Emphasize low-b to improve Dpar
+            weights[bvalues >= 100] = 1.1
             weights[bvalues > 100] = 1.0
 
         elif phase == 4:
