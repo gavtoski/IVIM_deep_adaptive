@@ -969,7 +969,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
         elif phase == 3:
             for name, param in net.named_parameters():
                 if 'encoder0' in name or 'encoder2' in name:
-                    net.encoder_soft_weights[name] = 0.05  # Dmv, Fmv
+                    net.encoder_soft_weights[name] = 0.03  # Dmv, Fmv
                 elif 'encoder1' in name:
                     net.encoder_soft_weights[name] = 0.3  # Dpar
                 elif net.use_three_compartment and 'encoder3' in name:
@@ -1028,7 +1028,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     #------------------------------------------------------
     # NETWORKS TRAINING LOOPS: MULTIPLE PARALLEL NETWORKS
     #------------------------------------------------------
-    max_epochs_per_phase = 10
+    max_epochs_by_phase = {1: 10, 2: 6, 3: 6}
     fine_tune_phase_epoch_counter = 0
     loss_log = []
     net.update_clipping_constraints(tissue_type="mixed", pad_fraction=padding_schedule.get(1, 0.3))
@@ -1037,6 +1037,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
         ## Train
         for epoch in range(100):  
+            max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
 
             # Fine-tuning phase
             if freeze_param:
@@ -1187,13 +1188,13 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
             # Phase tuning start here
             #---------------------------
             switch_phase = False
-            if num_bad_epochs == arg.train_pars.patience:
-                switch_phase = True
 
-            elif fine_tune_phase_epoch_counter >= max_epochs_per_phase:
-                print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
-                num_bad_epochs = arg.train_pars.patience
-                switch_phase = True
+            if not original_mode:
+                if fine_tune_phase_epoch_counter >= max_epochs_per_phase:
+                    print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
+                    num_bad_epochs = 0  # reset so next phase starts clean
+                    switch_phase = True
+
 
             # Handle the switch
             if switch_phase:
@@ -1204,6 +1205,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             print("[PHASE 2] Tuning Dmv and Dint...")
 
                             net.load_state_dict(final_model, strict=False)
+                            best = running_loss_val
                             fine_tune_phase = 2
                             fine_tune_phase_epoch_counter = 0 # only tune phase 2 for a short time
                             num_bad_epochs = 0
@@ -1230,6 +1232,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             print("[PHASE 3] Tuning Dpar and signal...")
 
                             net.load_state_dict(final_model, strict=False)
+                            best = running_loss_val
                             fine_tune_phase = 3
                             fine_tune_phase_epoch_counter = 0
                             num_bad_epochs = 0
@@ -1294,6 +1297,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     #------------------------------------------------------
     else:     
         for epoch in range(100):
+
+            max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
 
             # Fine-tuning phase
             if freeze_param:
@@ -1469,13 +1474,12 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
             #---------------------------
             # Check if it's time to switch phase: patience OR max_epochs_per_phase
             switch_phase = False
-            if num_bad_epochs == arg.train_pars.patience:
-                switch_phase = True
-    
-            elif fine_tune_phase_epoch_counter >= max_epochs_per_phase:
-                print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
-                num_bad_epochs = arg.train_pars.patience
-                switch_phase = True
+
+            if not original_mode:
+                if fine_tune_phase_epoch_counter >= max_epochs_per_phase:
+                    print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
+                    num_bad_epochs = 0  # reset so next phase starts clean
+                    switch_phase = True
 
             # Handle the switch
             if switch_phase:
@@ -1486,8 +1490,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                             print("[PHASE 2] Tuning Dmv and Dint(3C only)...")
 
                             net.load_state_dict(final_model, strict=False)
+                            best = running_loss_val
                             fine_tune_phase = 2
-                            fine_tune_phase_epoch_counter = 5
+                            fine_tune_phase_epoch_counter = 0
                             num_bad_epochs = 0
                             arg.train_pars.patience = 3
                             set_fine_tune_phase(net, bvalues, 2, (0, 1000), arg.train_pars.device)
@@ -1511,8 +1516,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                             print("[PHASE 3] Tuning Dpar...")
                             net.load_state_dict(final_model, strict=False)
+                            best = running_loss_val
                             fine_tune_phase = 3
-                            fine_tune_phase_epoch_counter = 5
+                            fine_tune_phase_epoch_counter = 0
                             num_bad_epochs = 0
                             arg.train_pars.patience = 3
                             set_fine_tune_phase(net, bvalues, 3, (0, 1000), arg.train_pars.device)
