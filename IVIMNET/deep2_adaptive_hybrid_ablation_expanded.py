@@ -906,7 +906,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     elif use_three_compartment:
         padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
     else:  # 2C adaptive
-        padding_schedule = {1: 1.0, 2: 0.5, 3: 0.3}
+        padding_schedule = {1: 0.5, 2: 0.25, 3: 0.2}
 
     if use_three_compartment:
         param_tags = {
