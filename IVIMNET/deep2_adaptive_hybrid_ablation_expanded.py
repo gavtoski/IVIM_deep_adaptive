@@ -432,7 +432,7 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
             return {
                 "Dpar": expand_range((0.00055, 0.00075)),
                 "Dmv":  expand_range((0.007, 0.025)),
-                "Fmv":  (0.030, 0.060) # try to keep the true to the original
+                "Fmv":  expand_range(0.030, 0.060) # 
             }
 
         elif model_type == "3C":
@@ -440,7 +440,7 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
                 "Dpar":  expand_range((0.0008, 0.0018)),
                 "Dint":  expand_range((0.0022, 0.0045)),
                 "Dmv":   expand_range((0.032, 0.18)),
-                "Fmv":   (0.08, 0.24),
+                "Fmv":   expand_range(0.08, 0.24),
                 "Fint":  expand_range((0.16, 0.42)),
                 "Ftotal": (None, 0.75)
             }
@@ -587,8 +587,9 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
         # ------------------------------------------------------
         # Compute total loss
         # ------------------------------------------------------
-        penalty_scale = mse_loss.detach()
-        scaled_constraint_loss = (order_term + fmv_term + mag_term) * penalty_scale
+        penalty_scale = 0.2 * mse_loss.detach()
+        raw_penalty = order_term + fmv_term + mag_term
+        scaled_constraint_loss = torch.min(raw_penalty, penalty_scale)
         total_loss = mse_loss + scaled_constraint_loss
 
         if debug == 1:
@@ -719,15 +720,16 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
         #-----------------------------
         # Return loss and breakdown
         #-----------------------------
-        penalty_scale = mse_loss.detach()
-        scaled_constraint_loss = (
+        penalty_scale = 0.2 * mse_loss.detach()
+        raw_penalty = (
             order_term +
             fmv_term +
             fint_term +
             mag_term +
             ftotal_term
-        ) * penalty_scale
+        )
 
+        scaled_constraint_loss = torch.min(raw_penalty, penalty_scale)
         total_loss = mse_loss + scaled_constraint_loss
 
 
@@ -906,7 +908,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
     elif use_three_compartment:
         padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
     else:  # 2C adaptive
-        padding_schedule = {1: 0.5, 2: 0.25, 3: 0.2}
+        padding_schedule = {1: 1.0, 2: 0.5, 3: 0.3}
 
     if use_three_compartment:
         param_tags = {
@@ -1104,7 +1106,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
                 optimizer.step()
 
                 with torch.no_grad():
-                    net.scaling_factor.clamp_(0, 1)
+                    net.scaling_factor.clamp_(0.001, 10)
                 running_loss_train += loss.item()
 
             # Loop to save gradients
@@ -1373,7 +1375,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
                 # Clip scaling_factor values to prevent instability
                 with torch.no_grad():
-                    net.scaling_factor.clamp_(0.001, 1)
+                    net.scaling_factor.clamp_(0.001, 10)
 
                 # record total loss and determine max loss over all batches
                 running_loss_train += loss.item()
