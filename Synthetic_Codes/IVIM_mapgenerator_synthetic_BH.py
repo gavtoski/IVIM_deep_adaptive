@@ -34,9 +34,9 @@ import argparse
 # Create IVIM class object
 class map_generator_NN():
 
-	def __init__(self, input_path, bvalues_path, dest_dir, arg, pre_trained_net=None, original_mode=False, weight_tuning= False, IR=False, freeze_param= False,
-				 boost_toggle=True, ablate_option=None, use_three_compartment=False, input_type="image",tissue_type="mixed", custom_dict=None):
-		self.input_path = input_path
+	def __init__(self, train_input_path, bvalues_path, dest_dir, arg, pre_trained_net=None, original_mode=False, weight_tuning= False, IR=False, freeze_param= False,
+				 boost_toggle=True, ablate_option=None, use_three_compartment=False, input_type="image",tissue_type="mixed", custom_dict=None, val_input_path=None):
+		self.train_input_path = train_input_path
 		self.bvalues_path = bvalues_path
 		self.arg = arg
 		self.dest_dir = dest_dir
@@ -51,6 +51,14 @@ class map_generator_NN():
 		self.use_three_compartment = use_three_compartment
 		self.tissue_type = tissue_type
 		self.custom_dict = custom_dict
+		
+		if val_input_path is None:
+		    self.val_input_path = train_input_path
+		    print("[WARNING]: validation set missing — defaulting to training set for validation")
+		else:
+		    self.val_input_path = val_input_path
+		    print("[INFO]: Using customized validation set")
+		    
 
 		if not hasattr(arg, 'net_pars') or arg.net_pars is None:
 			print("[INFO] net_pars not found in arg — defaulting to brain3 config.")
@@ -60,107 +68,113 @@ class map_generator_NN():
 				arg.net_pars = net_pars("brain2")
 
 
-		# === Set subject tag for saving logs ===
-		self.arg.subject_tag = os.path.basename(input_path).replace('.nii.gz', '').replace('.npy', '')
+		# Set subject tag for saving logs
+		# Get base tag like "NAWM_signal.npy" → "NAWM"
+		basename = os.path.basename(self.train_input_path).replace('.npy', '').replace('.nii.gz', '')
+		label_guess = basename.split("_")[0]  # "NAWM", "S1", "WMH", etc.
+		self.arg.subject_tag = label_guess
 		print(self.arg.subject_tag)
 
 	def load_and_preproc_data(self):
-		# Load DWI NIfTI
-		# Load data depending on input type
-		if self.input_type == "image":
-			self.data = nib.load(self.input_path)  # Store the data as a class attribute
-			datas = self.data.get_fdata()
-			self.sx, self.sy, self.sz, self.n_b_values = datas.shape
-		elif self.input_type == "array":
-			datas = np.load(self.input_path)
-			self.n_b_values = datas.shape[1]  # Expect shape (n_voxels, n_b_values)
-		else:
-			raise ValueError(f"Unsupported input_type: {self.input_type}. Expected 'image' or 'array'.")
+	    # Load and reorder b-values
+	    bval_txt = np.genfromtxt(self.bvalues_path)
+	    self.bvalues_raw = np.array(bval_txt)
+	    self.n_b_values = len(self.bvalues_raw)
 
-		print(f"Data dimensions: {datas.shape}")
+	    # Determine sorting order using TRAIN input (assume train and val has the same format, they should)
+	    if self.input_type == "image":
+	        self.data = nib.load(self.train_input_path)
+	        train_vol = self.data.get_fdata()  # Shape: [X, Y, Z, B]
+	        self.sx, self.sy, self.sz, _ = train_vol.shape
+	        mean_signals = np.mean(train_vol.reshape(-1, self.n_b_values), axis=0)
+	    elif self.input_type == "array":
+	        train_vol = np.load(self.train_input_path)  # Shape: [N, B]
+	        mean_signals = np.mean(train_vol, axis=0)
+	    else:
+	        raise ValueError(f"[ERROR] Unsupported input_type: {self.input_type}")
 
+	    self.sorted_indices = np.argsort(mean_signals)[::-1]
+	    self.bvalues = self.bvalues_raw[self.sorted_indices]
+	    self.selsb = self.bvalues == 0
 
-		# Handling different volume cases, uncomment if real data
-		#if self.n_b_values == 67:
-		#    print("Detected 67 volumes: Truncating to the first 46 volumes.")
-		#    datas = datas[..., :46]
-		#    self.n_b_values = 46
-		#elif self.n_b_values == 91:
-		#    print("Detected 91 volumes: Using the whole dataset.")
-		#elif self.n_b_values == 46:
-		#    print("Detected 46 volumes: Using the dataset as is.")
-		#else:
-		#    raise ValueError(f"Unexpected number of volumes: {self.n_b_values}. Expected 46, 67, or 91.")
+	    # Subfunction to clean data
+	    def clean_and_normalize(data, label):
+	        if self.input_type == "image":
+	            data = data[..., self.sorted_indices]
+	            flat = data.reshape(-1, self.n_b_values)
+	        else:
+	            flat = data[:, self.sorted_indices]
 
-		# Compute mean signal intensity per volume
-		if self.input_type == "image":
-			mean_signals = np.array([np.mean(datas[..., i]) for i in range(self.n_b_values)])
-		else:  # array
-			mean_signals = np.mean(datas, axis=0)  # shape: (n_bvals,)
+	        # Filter: voxels with strong S0
+	        S0 = np.nanmean(flat[:, self.selsb], axis=1)
+	        S0[S0 == 0] = np.nan
+	        valid = S0 > 0.5 * np.nanmedian(S0[S0 > 0])
+	        filtered = flat[valid]
+	        S0_filtered = np.nanmean(filtered[:, self.selsb], axis=1).astype('<f')
+	        norm = filtered / S0_filtered[:, None]
 
-		# Get sorting indices (descending order of signal intensity)
-		self.sorted_indices = np.argsort(mean_signals)[::-1]  # Descending order
+	        print(f"[INFO] {label}: {norm.shape[0]} voxels retained")
+	        return norm, valid
 
-		# Reorder data and b-values based on signal intensity
-		datas = datas[..., self.sorted_indices]
+	    # Clean training data 
+	    print(f"[INFO] Preprocessing training data from {self.train_input_path}")
+	    if self.input_type == "image":
+	        train_data = self.data.get_fdata()
+	    else:
+	        train_data = np.load(self.train_input_path)
+	    self.datatot_train, self.valid_id_train = clean_and_normalize(train_data, "Train")
 
-		bval_txt = np.genfromtxt(self.bvalues_path)
-		self.bvalues = np.array(bval_txt)[self.sorted_indices]  # Reorder b-values too
-		print(f"b values being fitted:{self.bvalues}")
+	    # Clean validation data
+	    print(f"[INFO] Preprocessing validation data from {self.val_input_path}")
+	    if self.input_type == "image":
+	        val_data = nib.load(self.val_input_path).get_fdata()
+	    else:
+	        val_data = np.load(self.val_input_path)
+	    self.datatot_val, self.valid_id_val = clean_and_normalize(val_data, "Val")
 
-		# Identify b=0 images after reordering
-		self.selsb = self.bvalues == 0
+	    # Post-filter summary
+        print(f"[INFO] Voxel summary — Train: {self.datatot_train.shape[0]} | Val: {self.datatot_val.shape[0]}")
+        if self.datatot_train.shape[0] == 0:
+            raise ValueError("[ERROR] No valid voxels in training set after S0 filtering.")
+        if self.datatot_val.shape[0] == 0:
+            raise ValueError("[ERROR] No valid voxels in validation set after S0 filtering.")
 
-		# Reshape DWI data
-		if self.input_type == "image":
-			X_dw = np.reshape(datas, (self.sx * self.sy * self.sz, self.n_b_values))
-		else:  # already flat
-			X_dw = datas
-
-		# Extract S0 from DWI by averaging S0 signal over b=0 slices with np.nanmean
-		S0 = np.nanmean(X_dw[:, self.selsb], axis=1)
-		S0[np.isnan(S0)] = 0
-
-		# Apply filter and normalize datatot, only for the voxels above threshold
-		self.valid_id = (S0 > (0.5 * np.median(S0[S0 > 0])))
-		datatot = X_dw[self.valid_id, :]
-		S0 = np.nanmean(datatot[:, self.selsb], axis=1).astype('<f')
-		self.datatot = datatot / S0[:, None]
 
 
 	def train_NN(self):
-		# Call load_and_preproc_data() to initialize self.valid_id and self.datatot
-		self.load_and_preproc_data()
+	    # Load training and validation data
+	    self.load_and_preproc_data()
 
-		# Remove rows with any NaN values
-		res = ~np.isnan(self.datatot).any(axis=1)  # True for rows with no NaN values
+	    # Remove rows with NaNs in training data
+	    res = ~np.isnan(self.datatot_train).any(axis=1)  # Boolean mask
 
-		# Neural Network fitting
-		start_time = time.time()
-		self.arg.train_pars.dest_dir = self.dest_dir  # set dest_dir
+	    # Assign destination directory
+	    self.arg.train_pars.dest_dir = self.dest_dir
 
-		# Turn off phase tuning hyperparams if original mode is on
-		if self.original_mode:
-		    self.weight_tuning = False
-		    self.freeze_param = False
-		    self.boost_toggle = False
-		    self.ablate_option = "none"
+	    # Disable tuning if in original mode
+	    if self.original_mode:
+	        self.weight_tuning = False
+	        self.freeze_param = False
+	        self.boost_toggle = False
+	        self.ablate_option = "none"
 
-		#Careful with deep or deep2
-		self.net = deep2.learn_IVIM(self.datatot[res], self.bvalues, self.arg,
-							original_mode=self.original_mode,
-							weight_tuning=self.weight_tuning,
-							IR=self.IR,
-							freeze_param=self.freeze_param,
-							boost_toggle=self.boost_toggle,
-							ablate_option=self.ablate_option,
-							use_three_compartment=self.use_three_compartment,
-							tissue_type=self.tissue_type,
-							custom_dict=self.custom_dict)
+	    # Train neural network using training data
+	    start_time = time.time()
+	    self.net = deep2.learn_IVIM(
+	        self.datatot_train[res], self.bvalues, self.arg,
+	        original_mode=self.original_mode,
+	        weight_tuning=self.weight_tuning,
+	        IR=self.IR,
+	        freeze_param=self.freeze_param,
+	        boost_toggle=self.boost_toggle,
+	        ablate_option=self.ablate_option,
+	        use_three_compartment=self.use_three_compartment,
+	        tissue_type=self.tissue_type,
+	        custom_dict=self.custom_dict
+	    )
+	    elapsed_time = time.time() - start_time
+	    print(f"\n[INFO] Time elapsed for Net training: {elapsed_time:.2f} seconds\n")
 
-
-		elapsed_time1net = time.time() - start_time
-		print('\nTime elapsed for Net: {}\n'.format(elapsed_time1net))
 
 	def reconstruct_IVIM(self, IVIM_maps, norm=True):
 	    """
@@ -245,7 +259,7 @@ class map_generator_NN():
 
 
 	def calculate_nrmse_and_plot(self, IVIM_reconstructed, norm=True):
-		# === Step 1: Load true signal ===
+		# Load true signal 
 		if norm:
 			if self.input_type == "image":
 				S_data = self.data.get_fdata()[..., self.sorted_indices]
@@ -268,11 +282,11 @@ class map_generator_NN():
 			S_original = np.nan_to_num(S_data, nan=0)
 			brain_mask = np.ones(S_original.shape[:3], dtype=bool)
 
-		# Step 2: Prepare prediction
+		# Prepare prediction
 		S_reconstructed = np.nan_to_num(IVIM_reconstructed, nan=0)
 		S_reconstructed[~brain_mask] = 0
 
-		# Step 3: Compute NRMSE per voxel 
+		# Compute NRMSE per voxel 
 		epsilon = np.percentile(S_original[S_original > 0], 1) if np.any(S_original > 0) else 1e-8
 		squared_error = (S_original - S_reconstructed) ** 2
 		mse_map = np.mean(squared_error, axis=-1)
@@ -280,7 +294,7 @@ class map_generator_NN():
 		norm_map = np.linalg.norm(S_original, axis=-1)
 		avg_nrmse_map = np.divide(rmse_map, norm_map, out=np.zeros_like(rmse_map), where=norm_map != 0)
 
-		# Step 4: Save map + histogram for image input
+		# Save map + histogram for image input
 		if self.input_type == "image":
 		  nrmse_nifti = nib.Nifti1Image(avg_nrmse_map, affine=self.data.affine, header=self.data.header)
 		  nib.save(nrmse_nifti, os.path.join(self.dest_dir, "nrmse_map.nii.gz"))
@@ -303,7 +317,7 @@ class map_generator_NN():
 			plt.savefig(os.path.join(self.dest_dir, "NRMSE_Dist_plot.png"))
 			print("NRMSE map and distribution plot saved successfully.")
 
-		# Step 5: Plot example voxel signal
+		# Plot example voxel signal
 		if self.input_type == "image":
 			x, y, z = S_original.shape[0] // 2, S_original.shape[1] // 2, S_original.shape[2] // 2
 			true_signal_voxel = S_original[x, y, z, :]
@@ -329,97 +343,80 @@ class map_generator_NN():
 
 		return global_nrmse
 
-	def predict_IVIM(self, return_maps=False):
+	def predict_IVIM_maps(self, return_maps=False):
+	    print(f"[INFO] Running predict_IVIM() with input_type: {self.input_type}")
+	    assert self.input_type in ("image", "array"), f"[ERROR] Invalid input_type: {self.input_type}"
 
-		print(f"[INFO] Running predict_IVIM() with input_type: {self.input_type}")
-		assert self.input_type in ("image", "array"), f"[ERROR] Invalid input_type: {self.input_type}"
+	    # [DATA TRAINING] Train if there is no pre-trained net 
+	    if self.pre_trained_net is None:
+	        print("[WARNING] No pre-trained net provided — training using training data")
+	        self.train_NN()
+	    else:
+	        print("[INFO] Using pre-trained net for inference only.")
+	        self.net = self.pre_trained_net.to(self.arg.train_pars.device)
 
-		if self.pre_trained_net is None:
-			self.train_NN()
-		else:
-			self.net = self.pre_trained_net.to(self.arg.train_pars.device)
+	    # [INFERENCE] Run inference on VAL data 
+	    start_time = time.time()
+	    paramsNN = deep2.predict_IVIM(self.datatot_val, self.bvalues, self.net, self.arg)
+	    elapsed_time = time.time() - start_time
+	    print(f"\nTime elapsed for Net inference: {elapsed_time:.2f} seconds\n")
 
-		# Run inference
-		start_time = time.time()
+	    if self.arg.train_pars.use_cuda:
+	        torch.cuda.empty_cache()
 
-		# Use deep or deep2 depending on original mode
-		paramsNN = deep2.predict_IVIM(self.datatot, self.bvalues, self.net, self.arg)
+	    # [MODEL SAVING PARAMS] Define model type and parameter names
+	    model_type = "3C" if self.use_three_compartment else "2C"
 
-		elapsed_time1netinf = time.time() - start_time
-		print('\nTime elapsed for Net inference: {}\n'.format(elapsed_time1netinf))
+	    names = {
+	        "3C": ['Dpar_NN_triexp', 'fmv_NN_triexp', 'Dmv_NN_triexp', 'Dint_NN_triexp', 'fint_NN_triexp', 'S0_NN_triexp'],
+	        "2C": ['Dpar_NN_biexp', 'Dmv_NN_biexp', 'fmv_NN_biexp', 'S0_NN_biexp']
+	    }[model_type]
 
+	    # Determine shape and initialize outputs 
+	    if self.input_type == "image":
+	        n_voxels = self.sx * self.sy * self.sz
+	        output_shape = (self.sx, self.sy, self.sz)
+	    else:
+	        n_voxels = self.datatot_val.shape[0]
+	        output_shape = (n_voxels,)
 
-		if self.arg.train_pars.use_cuda:
-			torch.cuda.empty_cache()
+	    saved_files = []
+	    ivim_maps = []
 
-		# === Determine model type and param names ===
-		model_type = "3C" if self.use_three_compartment else "2C"
+	    # [SAVE MAPS] Save each parameter map
+	    for k, name in enumerate(names):
+	        img = np.zeros(n_voxels)
+	        img[self.valid_id_val] = paramsNN[k][:np.sum(self.valid_id_val)]
+	        img = np.where(np.isnan(img) | (img < 0), 0, img)
 
-		if model_type == "3C":
-			names = [
-				'Dpar_NN_triexp',
-				'fmv_NN_triexp',
-				'Dmv_NN_triexp',
-				'Dint_NN_triexp',
-				'fint_NN_triexp',
-				'S0_NN_triexp'
-			]
-			
-		elif model_type == "2C":
-		    names = [
-		        'Dpar_NN_biexp',
-		        'Dmv_NN_biexp',     # previously Dstar_NN_biexp
-		        'fmv_NN_biexp',     # previously f_NN_biexp
-		        'S0_NN_biexp'
-    		]
+	        if self.input_type == "image":
+	            img_reshaped = img.reshape(output_shape)
+	            path = os.path.join(self.dest_dir, f"{name}.nii.gz")
+	            nib.save(nib.Nifti1Image(img_reshaped, self.data.affine, self.data.header), path)
+	        else:
+	            path = os.path.join(self.dest_dir, f"{name}.npy")
+	            np.save(path, img.astype(np.float32))
 
-		else:
-			raise ValueError(f"[ERROR] Unsupported model_type: {model_type}")
+	        saved_files.append(path)
+	        ivim_maps.append(img)
 
-		# === Determine output shape ===
-		if self.input_type == "image":
-			n_voxels = self.sx * self.sy * self.sz
-			output_shape = (self.sx, self.sy, self.sz)
-		else:
-			n_voxels = self.datatot.shape[0]
-			output_shape = (n_voxels,)
+	    if not saved_files:
+	        raise RuntimeError("[ERROR] No IVIM parameter files were saved!")
 
-		saved_files = []
-		ivim_maps = []
+	    print("[INFO] IVIM parameter files saved:")
+	    for f in saved_files:
+	        print(f" - {f}")
 
-		# === Save all predicted parameter maps ===
-		for k in range(len(names)):
-			img = np.zeros(n_voxels)
-			img[self.valid_id] = paramsNN[k][0:np.sum(self.valid_id)]
-			img = np.where(np.isnan(img) | (img < 0), 0, img)
+	    # [ERROR COMPUTATION] Reconstruct signal + compute NRMSE
+	    IVIM_reconstructed = self.reconstruct_IVIM(ivim_maps, norm=True)
+	    global_nrmse = self.calculate_nrmse_and_plot(IVIM_reconstructed)
 
-			if self.input_type == "image":
-				img_reshaped = np.reshape(img, output_shape)
-				path = os.path.join(self.dest_dir, f"{names[k]}.nii.gz")
-				nib.save(nib.Nifti1Image(img_reshaped, self.data.affine, self.data.header), path)
-			else:
-				path = os.path.join(self.dest_dir, f"{names[k]}.npy")
-				np.save(path, img.astype(np.float32))
+	    if return_maps:
+	        return global_nrmse, ivim_maps
+	    else:
+	        print("Maps saved as NIfTI files or .npy arrays.")
+	        return global_nrmse
 
-			saved_files.append(path)
-			ivim_maps.append(img)
-
-		if len(saved_files) == 0:
-			raise RuntimeError("[ERROR] No IVIM parameter files were saved!")
-
-		print("[INFO] IVIM parameter files saved:")
-		for f in saved_files:
-			print(f" - {f}")
-
-		# === Reconstruct IVIM signal for validation ===
-		IVIM_reconstructed = self.reconstruct_IVIM(ivim_maps, norm=True)
-		global_nrmse_error = self.calculate_nrmse_and_plot(IVIM_reconstructed)
-
-		if return_maps:
-			return global_nrmse_error, ivim_maps
-		else:
-			print("Maps saved as NIfTI files or .npy arrays.")
-			return global_nrmse_error
 
 
 def str2bool(v):
@@ -437,7 +434,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate IVIM maps.")
 
     # Add command-line arguments
-    parser.add_argument('--preproc_loc', type=str, required=True, help='Path to the preprocess data')
+    parser.add_argument('--train_loc', type=str, required=True, help='Path to the preprocess/train data')
     parser.add_argument('--bval_path', type=str, default='/scratch/nhoang2/IVIM_NeuroCovid/Data/bvals.txt',
                         help='Path to the appropriate bval file (default: shared 15 bvals)')
     parser.add_argument('--dest_dir', type=str, required=True, help='Destination folder')
@@ -452,6 +449,7 @@ if __name__ == "__main__":
     parser.add_argument('--use_three_compartment', type=str2bool, required=True, help='Use 3C or 2C model')
     parser.add_argument('--input_type', type=str, required=True, help='image or array input')
     parser.add_argument('--tissue_type', type=str, required=True, help='tissue type: mixed, NAWM, or WMH')
+    parser.add_argument('--val_loc', type=str, required=True, help='Path to the validation data')
 
     # Handle custom constraint bounds
     def parse_custom_dict(val):
@@ -489,7 +487,7 @@ if __name__ == "__main__":
 
     # Run IVIM prediction
     IVIM_object = map_generator_NN(
-        input_path=args.preproc_loc,
+        train_input_path=args.train_loc,
         bvalues_path=args.bval_path,
         dest_dir=args.dest_dir,
         arg=arg,
@@ -502,10 +500,11 @@ if __name__ == "__main__":
         use_three_compartment=args.use_three_compartment,
         input_type=args.input_type,
         tissue_type=args.tissue_type,
-        custom_dict=args.custom_dict
+        custom_dict=args.custom_dict,
+        val_input_path=args.val_loc
     )
 
-    IVIM_object.predict_IVIM()
+    IVIM_object.predict_IVIM_maps()
     plt.close('all')
 
 
