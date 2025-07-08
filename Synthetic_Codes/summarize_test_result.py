@@ -3,8 +3,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
+import datetime 
 
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+today_str = datetime.datetime.today().strftime("%Y%m%d")
 
 # --- CONFIGURATION ---
 seed = 69
@@ -76,7 +78,7 @@ for model in model_types:
 
 # --- SAVE TO EXCEL ---
 df_final = pd.DataFrame(records)
-excel_path = os.path.join(output_dir, "IVIM_GTparamErrors_Detail.xlsx")
+excel_path = os.path.join(output_dir, f"IVIM_GTparamErrors_Detail_{today_str}.xlsx")
 df_final.to_excel(excel_path, index=False)
 
 # --- SKIP IF EMPTY ---
@@ -132,14 +134,14 @@ ax2.set_title("Avg Reconstructed Signal Error by Model, Tissue, ModeType, and IR
 ax2.grid(True, axis='x', linestyle='--', alpha=0.6, which='both')
 ax2.legend()
 
-barplot_path = os.path.join(output_dir, "Avg_IVIM_Error_Barplot.png")
+barplot_path = os.path.join(output_dir, f"Avg_IVIM_Error_Barplot_{today_str}.png")
 plt.tight_layout()
 plt.savefig(barplot_path)
 plt.close()
 print(f"[SAVED] Barplot to: {barplot_path}")
 
 # --- RANGE PLOTTING FUNCTION ---
-def plot_range_widths_allparams(df, param_groups, model_type, output_dir):
+def plot_range_widths_allparams(df, param_groups, model_type, output_dir, today_str):
     n_params = len(param_groups)
     fig, axes = plt.subplots(nrows=n_params, figsize=(14, 4 * n_params), sharex=False)
     if n_params == 1: axes = [axes]
@@ -169,7 +171,7 @@ def plot_range_widths_allparams(df, param_groups, model_type, output_dir):
         ax.legend(loc='upper right')
 
     plt.tight_layout()
-    save_path = os.path.join(output_dir, f"{model_type}_AllParam_RangeWidths.png")
+    save_path = os.path.join(output_dir, f"{model_type}_AllParam_RangeWidths_{today_str}.png")
     plt.savefig(save_path)
     plt.close()
     print(f"[SAVED] {model_type} parameter range plot to: {save_path}")
@@ -181,7 +183,7 @@ param_groups_2c = {
     "Dmv":  ("Dmv_GT_min", "Dmv_GT_max", "Dmv_Pred_min", "Dmv_Pred_max"),
     "fmv":  ("fmv_GT_min", "fmv_GT_max", "fmv_Pred_min", "fmv_Pred_max")
 }
-plot_range_widths_allparams(df_2c, param_groups_2c, "2C", output_dir)
+plot_range_widths_allparams(df_2c, param_groups_2c, "2C", output_dir, today_str)
 
 # --- 3C RANGE PLOT ---
 df_3c = df_final[df_final["ModelType"] == "3C"].copy()
@@ -192,4 +194,4 @@ param_groups_3c = {
     "Dint": ("Dint_GT_min", "Dint_GT_max", "Dint_Pred_min", "Dint_Pred_max"),
     "fint": ("fint_GT_min", "fint_GT_max", "fint_Pred_min", "fint_Pred_max")
 }
-plot_range_widths_allparams(df_3c, param_groups_3c, "3C", output_dir)
+plot_range_widths_allparams(df_3c, param_groups_3c, "3C", output_dir, today_str)
