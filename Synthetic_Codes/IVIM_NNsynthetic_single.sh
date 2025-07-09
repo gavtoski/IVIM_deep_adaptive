@@ -16,33 +16,33 @@ export PATH="/scratch/nhoang2/bin:$PATH"
 eval "$(/scratch/nhoang2/bin/micromamba shell hook --shell=bash)"
 micromamba activate pytorch2
 
-# === Usage instructions ===
-if [ "$#" -lt 8 ]; then
-    echo "[USAGE] $0 <preproc_loc> <bval_path> <dest_dir> <original_mode> <weight_tuning> <IR> <freeze_param> <boost_toggle> [ablate_option] [use_three_compartment] [input_type] [tissue_type] [custom_dict]"
+# Usage instructions
+if [ "$#" -lt 9 ]; then
+    echo "[USAGE] $0 <train_loc> <val_loc> <bval_path> <dest_dir> <original_mode> <weight_tuning> <IR> <freeze_param> <boost_toggle> [ablate_option] [use_three_compartment] [input_type] [tissue_type] [custom_dict]"
     exit 1
 fi
 
-# === Parse inputs ===
-preproc_loc="$1"
-bval_path="$2"
-dest_dir="$3"
-original_mode="$4"
-weight_tuning="$5"
-IR="$6"
-freeze_param="$7"
-boost_toggle="$8"
-ablate_option="${9:-none}"
-use_three_compartment="${10:-True}"
-input_type="${11:-array}"
-tissue_type="${12:-mixed}"
-custom_dict="${13:-None}"
-dummy_arg="${14:-safe}"
+# Parse inputs 
+train_loc="$1"
+val_loc="$2"
+bval_path="$3"
+dest_dir="$4"
+original_mode="$5"
+weight_tuning="$6"
+IR="$7"
+freeze_param="$8"
+boost_toggle="$9"
+ablate_option="${10:-none}"
+use_three_compartment="${11:-True}"
+input_type="${12:-array}"
+tissue_type="${13:-mixed}"
+custom_dict="${14:-None}"
 
-# === Make sure output dir exists ===
+# Ensure output dirs 
 mkdir -p "$dest_dir"
 mkdir -p ./out_logs
 
-# === Add a guard to skip reruns ===
+# Skip if already done 
 DONE_FLAG="$dest_dir/.done"
 if [ -f "$DONE_FLAG" ]; then
     echo "[SKIP] Already finished this config. Found $DONE_FLAG. Exiting."
@@ -50,11 +50,12 @@ if [ -f "$DONE_FLAG" ]; then
 fi
 
 # === Log run info ===
-echo "[RUN START] $(date) | SUBJECT: $preproc_loc | IR=$IR | DEST=$dest_dir" >> "$dest_dir/run_trace.log"
+echo "[RUN START] $(date) | TRAIN: $train_loc | VAL: $val_loc | DEST: $dest_dir | IR=$IR" >> "$dest_dir/run_trace.log"
 
-# === Launch main Python script ===
+# Launch IVIM model generation
 python IVIM_mapgenerator_synthetic_BH.py \
-    --preproc_loc "$preproc_loc" \
+    --train_loc "$train_loc" \
+    --val_loc "$val_loc" \
     --bval_path "$bval_path" \
     --dest_dir "$dest_dir" \
     --original_mode "$original_mode" \
@@ -68,6 +69,5 @@ python IVIM_mapgenerator_synthetic_BH.py \
     --tissue_type "$tissue_type" \
     --custom_dict "$custom_dict"
 
-# === Mark job as done ===
 touch "$DONE_FLAG"
 echo "[DONE] Completed successfully at $(date)" >> "$dest_dir/run_trace.log"

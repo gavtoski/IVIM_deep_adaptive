@@ -43,20 +43,21 @@ for SUBJECT in "${SUBJECTS[@]}"; do
     continue
   fi
 
-  PREPROC="/scratch/nhoang2/IVIM_NeuroCovid/Data/Synth_Data_May2025_${MODEL_TYPE}_seed${SEED}_${NOISE}/${SUBJECT}.npy"
+  PREPROC="/scratch/nhoang2/IVIM_NeuroCovid/Data/Synth_Data_May2025_${MODEL_TYPE}_seed${SEED}_${NOISE}_train/${SUBJECT}.npy"
+  VAL_LOC="/scratch/nhoang2/IVIM_NeuroCovid/Data/Synth_Data_May2025_${MODEL_TYPE}_seed${SEED}_${NOISE}_val/${SUBJECT}.npy"
 
-  # === Run Adaptive Mode (OriginalOFF, TuneON, FreezeON, BoostOFF, Ablation=None) ===
+  # === Run Adaptive Mode (OriginalOFF, TuneON, FreezeON, BoostOFF) ===
   if [[ "$MODEL_TYPE" == "3C" ]]; then
     for IR in False True; do
       dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalOFF_TuneON_FreezeON_BoostOFF_none_IR${IR}_${tissue_type}"
       echo "[RUN] ${MODEL_TYPE} | Adaptive | $SUBJECT | Noise=${NOISE} | IR=${IR} | Tissue=${tissue_type} → $dest_dir"
-      sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$BVALS" "$dest_dir" \
+      sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
         False True "$IR" True False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
     done
   else
     dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalOFF_TuneON_FreezeON_BoostOFF_none_IRFalse_${tissue_type}"
     echo "[RUN] ${MODEL_TYPE} | Adaptive | $SUBJECT | Noise=${NOISE} | IR=False | Tissue=${tissue_type} → $dest_dir"
-    sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$BVALS" "$dest_dir" \
+    sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
       False True False True False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
   fi
 
@@ -65,13 +66,13 @@ for SUBJECT in "${SUBJECTS[@]}"; do
     for IR in False True; do
       dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalON_IR${IR}_${tissue_type}"
       echo "[RUN] ${MODEL_TYPE} | OriginalON | $SUBJECT | Noise=${NOISE} | IR=${IR} | Tissue=${tissue_type} → $dest_dir"
-      sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$BVALS" "$dest_dir" \
+      sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
         True False "$IR" False False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
     done
   else
     dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalON_IRFalse_${tissue_type}"
     echo "[RUN] ${MODEL_TYPE} | OriginalON | $SUBJECT | Noise=${NOISE} | IR=False | Tissue=${tissue_type} → $dest_dir"
-    sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$BVALS" "$dest_dir" \
+    sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
       True False False False False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
   fi
 done

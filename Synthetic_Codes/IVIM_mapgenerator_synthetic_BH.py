@@ -24,11 +24,7 @@ import IVIMNET.deep as deep
 #from IVIMNET.fitting_algorithms import fit_dats
 from hyperparams import hyperparams as hp
 import matplotlib.pyplot as plt
-
-# Load preset hyper-parameters from arg and check if GPU is available (done in main)
-#arg = hp()
-
-# import argparse for arguments input
+import datetime
 import argparse
 
 # Create IVIM class object
@@ -58,7 +54,7 @@ class map_generator_NN():
 		else:
 		    self.val_input_path = val_input_path
 		    print("[INFO]: Using customized validation set")
-		    
+
 
 		if not hasattr(arg, 'net_pars') or arg.net_pars is None:
 			print("[INFO] net_pars not found in arg — defaulting to brain3 config.")
@@ -130,14 +126,16 @@ class map_generator_NN():
 	        val_data = nib.load(self.val_input_path).get_fdata()
 	    else:
 	        val_data = np.load(self.val_input_path)
+	    
 	    self.datatot_val, self.valid_id_val = clean_and_normalize(val_data, "Val")
 
 	    # Post-filter summary
-        print(f"[INFO] Voxel summary — Train: {self.datatot_train.shape[0]} | Val: {self.datatot_val.shape[0]}")
-        if self.datatot_train.shape[0] == 0:
-            raise ValueError("[ERROR] No valid voxels in training set after S0 filtering.")
-        if self.datatot_val.shape[0] == 0:
-            raise ValueError("[ERROR] No valid voxels in validation set after S0 filtering.")
+	    print(f"[INFO] Voxel summary — Train: {self.datatot_train.shape[0]} | Val: {self.datatot_val.shape[0]}")
+	    if self.datatot_train.shape[0] == 0:
+	        raise ValueError("[ERROR] No valid voxels in training set after S0 filtering.")
+	    if self.datatot_val.shape[0] == 0:
+	        raise ValueError("[ERROR] No valid voxels in validation set after S0 filtering.")
+
 
 
 
@@ -259,89 +257,83 @@ class map_generator_NN():
 
 
 	def calculate_nrmse_and_plot(self, IVIM_reconstructed, norm=True):
-		# Load true signal 
-		if norm:
-			if self.input_type == "image":
-				S_data = self.data.get_fdata()[..., self.sorted_indices]
-				S0 = np.nanmean(S_data[..., self.selsb], axis=-1)
-				brain_mask = S0 > (0.5 * np.median(S0[S0 > 0]))
-				S0[~brain_mask] = np.nan
-				S_data_norm = np.zeros_like(S_data)
-				S_data_norm[brain_mask] = S_data[brain_mask] / S0[brain_mask, None]
-				S_original = np.nan_to_num(S_data_norm, nan=0)
-			else:
-				S_original = np.load(self.input_path)[:, self.sorted_indices]
-				S0 = np.nanmean(S_original[:, self.selsb], axis=1)
-				valid_vox = S0 > (0.5 * np.median(S0[S0 > 0]))
-				S_original = S_original[valid_vox] / S0[valid_vox, None]
-				S_original = np.nan_to_num(S_original, nan=0)
-				brain_mask = valid_vox
-		else:
-			S_data = self.data.get_fdata()[..., :self.n_b_values]
-			S_data = S_data[..., self.sorted_indices]
-			S_original = np.nan_to_num(S_data, nan=0)
-			brain_mask = np.ones(S_original.shape[:3], dtype=bool)
+	    today = datetime.today().strftime("%Y-%m-%d")
 
-		# Prepare prediction
-		S_reconstructed = np.nan_to_num(IVIM_reconstructed, nan=0)
-		S_reconstructed[~brain_mask] = 0
+	    # Use preprocessed, normalized val data
+	    S_original = self.datatot_val.copy()
+	    S_reconstructed = np.nan_to_num(IVIM_reconstructed, nan=0)
 
-		# Compute NRMSE per voxel 
-		epsilon = np.percentile(S_original[S_original > 0], 1) if np.any(S_original > 0) else 1e-8
-		squared_error = (S_original - S_reconstructed) ** 2
-		mse_map = np.mean(squared_error, axis=-1)
-		rmse_map = np.sqrt(mse_map)
-		norm_map = np.linalg.norm(S_original, axis=-1)
-		avg_nrmse_map = np.divide(rmse_map, norm_map, out=np.zeros_like(rmse_map), where=norm_map != 0)
+	    # Align masks
+	    brain_mask = self.valid_id_val if self.input_type == "array" else np.ones_like(S_reconstructed[..., 0], dtype=bool)
+	    S_reconstructed[~brain_mask] = 0
 
-		# Save map + histogram for image input
-		if self.input_type == "image":
-		  nrmse_nifti = nib.Nifti1Image(avg_nrmse_map, affine=self.data.affine, header=self.data.header)
-		  nib.save(nrmse_nifti, os.path.join(self.dest_dir, "nrmse_map.nii.gz"))
+	    # Compute NRMSE
+	    squared_error = (S_original - S_reconstructed) ** 2
+	    mse_map = np.mean(squared_error, axis=-1)
+	    rmse_map = np.sqrt(mse_map)
+	    norm_map = np.linalg.norm(S_original, axis=-1)
+	    avg_nrmse_map = np.divide(rmse_map, norm_map, out=np.zeros_like(rmse_map), where=norm_map != 0)
 
-		global_nrmse = np.mean(avg_nrmse_map)
-		print(f"Global NRMSE: {global_nrmse}")
-		model_tag = "IVIM3C" if self.use_three_compartment else "IVIM2C"
-		with open(os.path.join(self.dest_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
-		    f.write(f"{global_nrmse}\n")
+	    # Save NRMSE map if image input
+	    if self.input_type == "image":
+	        nrmse_nifti = nib.Nifti1Image(avg_nrmse_map, affine=self.data.affine, header=self.data.header)
+	        nib.save(nrmse_nifti, os.path.join(self.arg.train_pars.dest_dir, "nrmse_map.nii.gz"))
+
+	    # Save visualizations in structured folder
+	    dest_dir = self.arg.train_pars.dest_dir
+	    result_base = os.path.dirname(os.path.dirname(dest_dir))
+	    mode_tag = os.path.basename(dest_dir)
+	    save_dir = os.path.join(result_base, f"loss_log_allpenalty_{today}", mode_tag)
+	    os.makedirs(save_dir, exist_ok=True)
+
+	    # Save global NRMSE
+	    global_nrmse = np.mean(avg_nrmse_map)
+	    print(f"Global NRMSE: {global_nrmse}")
+	    model_tag = "IVIM3C" if self.use_three_compartment else "IVIM2C"
+	    with open(os.path.join(save_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
+	        f.write(f"{global_nrmse}\n")
+	    # Also save a copy in main output folder
+		#with open(os.path.join(self.arg.train_pars.dest_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
+		#    f.write(f"{global_nrmse}\n")
+    
+
+	    # Plot NRMSE histogram
+	    if self.input_type == "image":
+	        plt.figure(figsize=(10, 6))
+	        plt.hist(avg_nrmse_map.flatten(), bins=50, color='blue', alpha=0.7, edgecolor='black')
+	        plt.xlabel("NRMSE")
+	        plt.ylabel("Frequency")
+	        plt.title("Distribution of NRMSE Across Voxels")
+	        plt.grid(axis='y', linestyle='--', alpha=0.7)
+	        plt.savefig(os.path.join(save_dir, "NRMSE_Dist_plot.png"))
+	        print("NRMSE map and distribution plot saved successfully.")
+
+	    # Plot signal fit from center voxel
+	    if self.input_type == "image":
+	        x, y, z = avg_nrmse_map.shape[0] // 2, avg_nrmse_map.shape[1] // 2, avg_nrmse_map.shape[2] // 2
+	        idx_voxel = np.ravel_multi_index((x, y, z), dims=avg_nrmse_map.shape)
+	    else:
+	        idx_voxel = S_original.shape[0] // 2
+
+	    true_signal_voxel = S_original[idx_voxel]
+	    reconstructed_signal_voxel = S_reconstructed[idx_voxel]
+
+	    b_values = np.sort(self.bvalues.flatten())
+	    plt.figure(figsize=(10, 8))
+	    plt.scatter(b_values, true_signal_voxel, color='red', label="True Signal", marker="o", s=50)
+	    plt.plot(b_values, reconstructed_signal_voxel, label='Reconstructed IVIM Signal', linestyle="--", linewidth=2)
+	    plt.xlabel("b-value (s/mm²)")
+	    plt.ylabel("Signal Intensity")
+	    plt.title("IVIM Reconstructed Signal vs b-values")
+	    plt.legend()
+	    plt.grid(True)
+	    plt.savefig(os.path.join(save_dir, f"IVIM_{model_tag}_fit_curve.png"))
+	    plt.close()
+
+	    print("Reconstructed IVIM curve fit saved successfully.")
+	    return global_nrmse
 
 
-		if self.input_type == "image":
-			flattened_nrmse = avg_nrmse_map.flatten()
-			plt.figure(figsize=(10, 6))
-			plt.hist(flattened_nrmse, bins=50, color='blue', alpha=0.7, edgecolor='black')
-			plt.xlabel("NRMSE")
-			plt.ylabel("Frequency")
-			plt.title("Distribution of NRMSE Across Voxels")
-			plt.grid(axis='y', linestyle='--', alpha=0.7)
-			plt.savefig(os.path.join(self.dest_dir, "NRMSE_Dist_plot.png"))
-			print("NRMSE map and distribution plot saved successfully.")
-
-		# Plot example voxel signal
-		if self.input_type == "image":
-			x, y, z = S_original.shape[0] // 2, S_original.shape[1] // 2, S_original.shape[2] // 2
-			true_signal_voxel = S_original[x, y, z, :]
-			reconstructed_signal_voxel = S_reconstructed[x, y, z, :]
-		else:
-			idx = S_original.shape[0] // 2
-			true_signal_voxel = S_original[idx, :]
-			reconstructed_signal_voxel = S_reconstructed[idx, :]
-
-		b_values = np.sort(self.bvalues.flatten())
-		plt.figure(figsize=(10, 8))
-		plt.scatter(b_values, true_signal_voxel, color='red', label="True Signal", marker="o", s=50)
-		plt.plot(b_values, reconstructed_signal_voxel, label='Reconstructed IVIM Signal', linestyle="--", linewidth=2)
-		plt.xlabel("b-value (s/mm²)")
-		plt.ylabel("Signal Intensity")
-		plt.title("IVIM Reconstructed Signal vs b-values")
-		plt.legend()
-		plt.grid(True)
-		plt.savefig(os.path.join(self.dest_dir, f"IVIM_{model_tag}_fit_curve.png"))
-		plt.close()
-
-		print("Reconstructed IVIM curve fit saved successfully.")
-
-		return global_nrmse
 
 	def predict_IVIM_maps(self, return_maps=False):
 	    print(f"[INFO] Running predict_IVIM() with input_type: {self.input_type}")

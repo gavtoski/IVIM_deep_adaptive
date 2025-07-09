@@ -6,7 +6,7 @@ import warnings
 import datetime 
 
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
-today_str = datetime.datetime.today().strftime("%Y%m%d")
+today_str = datetime.datetime.today().strftime("%Y-%m-%d")
 
 # --- CONFIGURATION ---
 seed = 69
@@ -44,7 +44,8 @@ for model in model_types:
                 try: nrmse_val = float(f.read().strip())
                 except ValueError: nrmse_val = None
 
-            gt_path = os.path.join(f"{data_root}_{model}_seed{seed}_{noise_mode}")
+            gt_path = os.path.join(f"{data_root}_{model}_seed{seed}_{noise_mode}_val")
+
             param_list = ivim_params[model]
             param_errors = {f"{p}_Err": np.nan for p in all_params}
             param_errors.update({f"{p}_{s}": np.nan for p in all_params for s in ["GT_min", "GT_max", "Pred_min", "Pred_max"]})
