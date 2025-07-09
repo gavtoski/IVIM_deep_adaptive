@@ -24,7 +24,7 @@ import IVIMNET.deep as deep
 #from IVIMNET.fitting_algorithms import fit_dats
 from hyperparams import hyperparams as hp
 import matplotlib.pyplot as plt
-import datetime
+from datetime import datetime
 import argparse
 
 # Create IVIM class object
