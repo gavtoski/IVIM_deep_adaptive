@@ -45,6 +45,52 @@ from hyperparams import net_pars as net_pars_class
 torch.manual_seed(0)
 np.random.seed(0)
 
+
+# Classify tissue type, used by Net's forward fucntion
+def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_signal_dict=None):
+	"""
+	Classifies a voxel as 'NAWM', 'WMH', or 'S1' based on its *mean b=1000 signal* value.
+
+	Args:
+		signal_val (float): The voxel's normalized signal intensity at b=1000.
+		model_type (str): '3C' or '2C' IVIM model.
+		IR (bool): Whether IR signal model is used (only applies to '3C').
+		custom_signal_dict (dict, optional): Overrides default priors. Must be a dict of form:
+			{"NAWM": val, "WMH": val, "S1": val}
+
+	Returns:
+		str: One of 'NAWM', 'WMH', or 'S1' depending on signal thresholding.
+	"""
+
+	# Default signal priors at b=1000
+	default_signals = {
+		"3C": {
+			False: {"NAWM": 0.5019, "WMH": 0.3664, "S1": 0.1602},
+			True:  {"NAWM": 0.1564, "WMH": 0.1162, "S1": 0.0527}
+		},
+		"2C": {
+			False: {"NAWM": 0.3157, "WMH": 0.1673, "S1": 0.2248}
+		}
+	}
+
+	signal_dict = custom_signal_dict if custom_signal_dict is not None else default_signals[model_type][IR]
+
+	# Sort tissue types by signal intensity (descending)
+	ordered = sorted(signal_dict.items(), key=lambda x: x[1], reverse=True)
+
+	# Compute dynamic thresholds
+	t1 = (ordered[0][1] + ordered[1][1]) / 2
+	t2 = (ordered[1][1] + ordered[2][1]) / 2
+
+	# Classify
+	if signal_val > t1:
+		return ordered[0][0]
+	elif signal_val > t2:
+		return ordered[1][0]
+	else:
+		return ordered[2][0]
+
+
 # Define the neural network.
 class Net(nn.Module):
 	def __init__(self, bvalues, net_pars, rel_times, scaling_factor=None, original_mode=False, weight_tuning=False, IR=False, freeze_param=False, use_three_compartment=True):
@@ -297,11 +343,27 @@ class Net(nn.Module):
 				Dmv_raw, Dpar_raw, Fmv_raw = [out[:, i].unsqueeze(1) for i in range(3)]
 			S0_raw = out[:, 5].unsqueeze(1) if self.net_pars.fitS0 else torch.ones_like(Dpar_raw)
 
-		# Apply constraints 
+		#--------------------
+		#  Apply constraints 
+		#--------------------
 		# Get constraint function and bounds
 		if self.original_mode and (not hasattr(self.net_pars, 'con') or not self.net_pars.con):
 			self.net_pars.con = 'sigmoid'
 
+		# Determine net_pars constraints based on tissue types using b1000 signal
+		if not self.original_mode:
+			X_b1000 = X[:, -1]  # last b-value assumed to be b=1000
+			b1000_mean = X_b1000.mean().item()
+
+			tissue_guess = classify_tissue_by_signal(
+				signal_val=b1000_mean,
+				model_type=self.net_pars.model_type,
+				IR=self.net_pars.IR
+			)
+
+			self.update_clipping_constraints(tissue_type=tissue_guess)
+
+		# Get constraints for the updated net_pars
 		con = self.net_pars.con
 		cmin = self.net_pars.cons_min
 		cmax = self.net_pars.cons_max
@@ -349,6 +411,11 @@ class Net(nn.Module):
 		constrained_outputs = {}
 		for i, pname in enumerate(self.net_pars.param_names):
 			constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[i], cmax[i])
+
+
+		#--------------------------------
+		# Reconstruct predicted signal
+		#--------------------------------
 
 		# Extract constrained parameters for convenience
 		Dpar = constrained_outputs['Dpar']
@@ -548,6 +615,14 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 		# ----------------------------
 		# Constraint penalties (2C)
 		# ----------------------------
+		X_b1000 = X_batch[:,-1] # extract the b-1000 signal to determine tissue prior
+		if not model.original_mode:
+			tissue_type = classify_tissue_by_signal(
+				signal_val=X_b1000.mean().item(),
+				model_type='2C',
+				IR=model.IR
+				)
+		
 		bounds = constraint_prior_func(tissue_type=tissue_type, model_type="2C", custom_dict=custom_dict)
 
 		penalty_order = torch.mean(F.softplus(Dpar - Dmv)) 
@@ -660,6 +735,13 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
 		#------------------------
 		# Constraint penalties
 		#------------------------
+		X_b1000 = X_batch[:,-1] # extract the b-1000 signal to determine tissue prior
+		if not model.original_mode:
+			tissue_type = classify_tissue_by_signal(
+				signal_val=X_b1000.mean().item(),
+				model_type='3C',
+				IR=model.IR
+				)
 		bounds = constraint_prior_func(tissue_type=tissue_type, model_type="3C", custom_dict=custom_dict)
 
 		penalty_order  = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv)) 
@@ -1217,15 +1299,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 							#Update padfrac
 							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-							net.update_clipping_constraints(
-								tissue_type=tissue_type,  # from learn_IVIM() args
-								pad_fraction=pad_frac
-								)
-
 							print(f"Constraint padding updated to {pad_frac}")
-							print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-							print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
-
+							
 
 						elif fine_tune_phase == 2:
 							#if not use_three_compartment:
@@ -1244,16 +1319,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 							#Update padfrac
 							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-							net.update_clipping_constraints(
-								tissue_type=tissue_type,  # from learn_IVIM() args
-								pad_fraction=pad_frac
-								)
-
 							print(f"Constraint padding updated to {pad_frac}")
-							print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-							print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
-
-
+							
 						elif fine_tune_phase == 3:
 							print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")
 							break
@@ -1326,8 +1393,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 					X_pred, Dpar_pred, Fmv_pred, Dmv_pred, Dint_pred, Fint_pred, S0_pred = outputs
 				else:
 					X_pred, Dpar_pred, Fmv_pred, Dmv_pred, S0_pred = outputs
-
-
 
 				# removing nans and too high/low predictions to prevent overshooting
 				X_pred[isnan(X_pred)] = 0
@@ -1502,16 +1567,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 							#Update padfrac
 							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-							net.update_clipping_constraints(
-								tissue_type=tissue_type,  # from learn_IVIM() args
-								pad_fraction=pad_frac
-								)
-
 							print(f"Constraint padding updated to {pad_frac}")
-							print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-							print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
-
-
+							
 						elif fine_tune_phase == 2:
 							#if not use_three_compartment:
 							#    print("[SKIP] Phase 3 skipped for 2C model.")
@@ -1528,14 +1585,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 							#Update padfrac
 							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
-							net.update_clipping_constraints(
-								tissue_type=tissue_type,  # from learn_IVIM() args
-								pad_fraction=pad_frac
-								)
 
 							print(f"Constraint padding updated to {pad_frac}")
-							print(f"[BOUNDS] cons_min: {np.round(net.net_pars.cons_min, 6)}")
-							print(f"[BOUNDS] cons_max: {np.round(net.net_pars.cons_max, 6)}")
 
 
 						elif fine_tune_phase == 3:
