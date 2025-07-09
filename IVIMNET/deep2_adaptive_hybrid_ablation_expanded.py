@@ -1587,7 +1587,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
     # Encode ablation setting
     if str(ablate_option).lower() in ['remove_fmv', 'remove_order', 'remove_ftotal', 'remove_fint', 'remove_magnitude', 'none']:
-        mode_tag += f"_{ablate_option}"
+        mode_tag += f"_{str(ablate_option).lower()}"
 
 
     # Encode boost status
