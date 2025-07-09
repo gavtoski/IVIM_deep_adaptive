@@ -280,21 +280,46 @@ class map_generator_NN():
 	        nib.save(nrmse_nifti, os.path.join(self.arg.train_pars.dest_dir, "nrmse_map.nii.gz"))
 
 	    # Save visualizations in structured folder
-	    dest_dir = self.arg.train_pars.dest_dir
-	    result_base = os.path.dirname(os.path.dirname(dest_dir))
-	    mode_tag = os.path.basename(dest_dir)
-	    save_dir = os.path.join(result_base, f"loss_log_allpenalty_{today}", mode_tag)
-	    os.makedirs(save_dir, exist_ok=True)
+		dest_dir = self.arg.train_pars.dest_dir
+		result_base = os.path.dirname(os.path.dirname(dest_dir))
+
+		# Construct mode tag
+		model_type = "3C" if self.use_three_compartment else "2C"
+		mode_tag = f"{model_type}_{'OriginalON' if self.original_mode else 'OriginalOFF'}"
+		mode_tag += "_IR1" if str(self.IR).lower() in ("true", "1", "yes") else "_IR0"
+
+		if self.weight_tuning:
+		    mode_tag += "_Tune"
+		    mode_tag += "_FreezeON" if self.freeze_param else "_FreezeOFF"
+
+		if str(self.ablate_option).lower() in [
+		    'remove_fmv', 'remove_order', 'remove_ftotal',
+		    'remove_fint', 'remove_magnitude', 'none'
+		]:
+		    mode_tag += f"_{self.ablate_option}"
+
+		mode_tag += "_Boost" if self.boost_toggle else "_NoBoost"
+
+		bval_len = len(self.bvalues)
+		mode_tag += f"_b{bval_len}"
+
+		true_tissue_type = getattr(self.arg, 'tissue_type', 'mixed')
+		if true_tissue_type in ['NAWM', 'WMH', 'mixed']:
+		    mode_tag += f"_{true_tissue_type}"
+
+		# Final save directory
+		save_dir = os.path.join(result_base, f"loss_log_allpenalty_{today}", mode_tag)
+		os.makedirs(save_dir, exist_ok=True)
 
 	    # Save global NRMSE
 	    global_nrmse = np.mean(avg_nrmse_map)
 	    print(f"Global NRMSE: {global_nrmse}")
 	    model_tag = "IVIM3C" if self.use_three_compartment else "IVIM2C"
-	    with open(os.path.join(save_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
-	        f.write(f"{global_nrmse}\n")
-	    # Also save a copy in main output folder
-		#with open(os.path.join(self.arg.train_pars.dest_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
-		#    f.write(f"{global_nrmse}\n")
+	    #with open(os.path.join(save_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
+	    #    f.write(f"{global_nrmse}\n")
+	    # Save a copy in main output folder
+		with open(os.path.join(self.arg.train_pars.dest_dir, f"global_nrmse_{model_tag}.txt"), "w") as f:
+		    f.write(f"{global_nrmse}\n")
     
 
 	    # Plot NRMSE histogram

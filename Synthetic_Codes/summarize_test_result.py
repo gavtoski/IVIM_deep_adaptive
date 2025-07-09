@@ -39,6 +39,7 @@ for model in model_types:
             if not os.path.isdir(mode_path): continue
 
             mse_file = os.path.join(mode_path, f"global_nrmse_IVIM{model}.txt")
+
             if not os.path.isfile(mse_file): continue
             with open(mse_file, 'r') as f:
                 try: nrmse_val = float(f.read().strip())
