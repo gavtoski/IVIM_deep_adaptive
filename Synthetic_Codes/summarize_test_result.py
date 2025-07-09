@@ -20,63 +20,63 @@ os.makedirs(output_dir, exist_ok=True)
 model_types = ["2C", "3C"]
 subjects = ["S1_signal", "NAWM_signal", "WMH_signal"]
 ivim_params = {
-    "2C": ["Dpar", "Dmv", "fmv"],
-    "3C": ["Dpar", "Dmv", "fmv", "Dint", "fint"]
+	"2C": ["Dpar", "Dmv", "fmv"],
+	"3C": ["Dpar", "Dmv", "fmv", "Dint", "fint"]
 }
 all_params = ["Dpar", "Dmv", "Dint", "fmv", "fint"]
 
 # --- DATA EXTRACTION ---
 records = []
 for model in model_types:
-    model_result_root = os.path.join(result_root + model)
-    for subject in subjects:
-        tissue = subject.split("_")[0]
-        subject_dir = os.path.join(model_result_root, subject)
-        if not os.path.isdir(subject_dir): continue
+	model_result_root = os.path.join(result_root + model)
+	for subject in subjects:
+		tissue = subject.split("_")[0]
+		subject_dir = os.path.join(model_result_root, subject)
+		if not os.path.isdir(subject_dir): continue
 
-        for mode_folder in os.listdir(subject_dir):
-            mode_path = os.path.join(subject_dir, mode_folder)
-            if not os.path.isdir(mode_path): continue
+		for mode_folder in os.listdir(subject_dir):
+			mode_path = os.path.join(subject_dir, mode_folder)
+			if not os.path.isdir(mode_path): continue
 
-            mse_file = os.path.join(mode_path, f"global_nrmse_IVIM{model}.txt")
+			mse_file = os.path.join(mode_path, f"global_nrmse_IVIM{model}.txt")
 
-            if not os.path.isfile(mse_file): continue
-            with open(mse_file, 'r') as f:
-                try: nrmse_val = float(f.read().strip())
-                except ValueError: nrmse_val = None
+			if not os.path.isfile(mse_file): continue
+			with open(mse_file, 'r') as f:
+				try: nrmse_val = float(f.read().strip())
+				except ValueError: nrmse_val = None
 
-            gt_path = os.path.join(f"{data_root}_{model}_seed{seed}_{noise_mode}_val")
+			gt_path = os.path.join(f"{data_root}_{model}_seed{seed}_{noise_mode}_val")
 
-            param_list = ivim_params[model]
-            param_errors = {f"{p}_Err": np.nan for p in all_params}
-            param_errors.update({f"{p}_{s}": np.nan for p in all_params for s in ["GT_min", "GT_max", "Pred_min", "Pred_max"]})
+			param_list = ivim_params[model]
+			param_errors = {f"{p}_Err": np.nan for p in all_params}
+			param_errors.update({f"{p}_{s}": np.nan for p in all_params for s in ["GT_min", "GT_max", "Pred_min", "Pred_max"]})
 
-            for param in param_list:
-                gt_file = os.path.join(gt_path, f"{tissue}_{param}_synthetic.npy")
-                pred_suffix = "biexp" if model == "2C" else "triexp"
-                pred_file = os.path.join(mode_path, f"{param}_NN_{pred_suffix}.npy")
-                if not os.path.isfile(gt_file) or not os.path.isfile(pred_file): continue
+			for param in param_list:
+				gt_file = os.path.join(gt_path, f"{tissue}_{param}_synthetic.npy")
+				pred_suffix = "biexp" if model == "2C" else "triexp"
+				pred_file = os.path.join(mode_path, f"{param}_NN_{pred_suffix}.npy")
+				if not os.path.isfile(gt_file) or not os.path.isfile(pred_file): continue
 
-                gt = np.load(gt_file)
-                pred = np.load(pred_file)
-                if gt.shape != pred.shape: continue
+				gt = np.load(gt_file)
+				pred = np.load(pred_file)
+				if gt.shape != pred.shape: continue
 
-                nrmse = np.sqrt(np.mean((pred - gt) ** 2)) / max(np.mean(gt), 1e-6)
-                param_errors[f"{param}_Err"] = nrmse
-                param_errors[f"{param}_GT_min"] = np.min(gt)
-                param_errors[f"{param}_GT_max"] = np.max(gt)
-                param_errors[f"{param}_Pred_min"] = np.min(pred)
-                param_errors[f"{param}_Pred_max"] = np.max(pred)
+				nrmse = np.sqrt(np.mean((pred - gt) ** 2)) / max(np.mean(gt), 1e-6)
+				param_errors[f"{param}_Err"] = nrmse
+				param_errors[f"{param}_GT_min"] = np.min(gt)
+				param_errors[f"{param}_GT_max"] = np.max(gt)
+				param_errors[f"{param}_Pred_min"] = np.min(pred)
+				param_errors[f"{param}_Pred_max"] = np.max(pred)
 
-            avg_ivim_err = np.nanmean([v for k, v in param_errors.items() if k.endswith("_Err")])
-            mode_type = "Original" if "OriginalON" in mode_folder else "Adaptive"
-            IR = "IRTrue" in mode_folder
-            records.append({
-                "ModelType": model, "ModeType": mode_type, "IR": IR,
-                "Subject": subject, "Tissue": tissue, "Mode": mode_folder,
-                "NRMSE": nrmse_val, **param_errors,
-                "Avg_IVIM_Err": avg_ivim_err, "Path": mode_path
-            })
+			avg_ivim_err = np.nanmean([v for k, v in param_errors.items() if k.endswith("_Err")])
+			mode_type = "Original" if "OriginalON" in mode_folder else "Adaptive"
+			IR = "IRTrue" in mode_folder
+			records.append({
+				"ModelType": model, "ModeType": mode_type, "IR": IR,
+				"Subject": subject, "Tissue": tissue, "Mode": mode_folder,
+				"NRMSE": nrmse_val, **param_errors,
+				"Avg_IVIM_Err": avg_ivim_err, "Path": mode_path
+			})
 
 # --- SAVE TO EXCEL ---
 df_final = pd.DataFrame(records)
@@ -85,8 +85,8 @@ df_final.to_excel(excel_path, index=False)
 
 # --- SKIP IF EMPTY ---
 if df_final.empty:
-    print("[WARNING] No valid model data found. Skipping all plots.")
-    exit()
+	print("[WARNING] No valid model data found. Skipping all plots.")
+	exit()
 
 # --- IVIM & SIGNAL ERROR BARPLOTS ---
 df_plot_ivim = df_final.groupby(["ModelType", "Tissue", "ModeType", "IR"])["Avg_IVIM_Err"].mean().reset_index()
@@ -101,16 +101,16 @@ df_pivot_signal = df_pivot_signal.replace(0, 1e-6)
 fig, axes = plt.subplots(nrows=2, figsize=(12, 12))
 bar_width = 0.2
 group_colors = {
-    "Original_IR0": 'darkorange', "Original_IR1": 'sandybrown',
-    "Adaptive_IR0": 'dodgerblue', "Adaptive_IR1": 'skyblue'
+	"Original_IR0": 'darkorange', "Original_IR1": 'sandybrown',
+	"Adaptive_IR0": 'dodgerblue', "Adaptive_IR1": 'skyblue'
 }
 
 # Plot IVIM error
 ax1 = axes[0]
 index_ivim = np.arange(len(df_pivot_ivim))
 for i, group in enumerate(group_colors):
-    if group in df_pivot_ivim.columns:
-        ax1.barh(index_ivim + (i - 1.5) * bar_width,
+	if group in df_pivot_ivim.columns:
+		ax1.barh(index_ivim + (i - 1.5) * bar_width,
                  df_pivot_ivim[group], bar_width,
                  label=group, color=group_colors[group])
 ax1.set_yticks(index_ivim)
@@ -125,8 +125,8 @@ ax2 = axes[1]
 index_signal = np.arange(len(df_pivot_signal))
 ax2.set_xscale("log")
 for i, group in enumerate(group_colors):
-    if group in df_pivot_signal.columns:
-        ax2.barh(index_signal + (i - 1.5) * bar_width,
+	if group in df_pivot_signal.columns:
+		ax2.barh(index_signal + (i - 1.5) * bar_width,
                  df_pivot_signal[group], bar_width,
                  label=group, color=group_colors[group])
 ax2.set_yticks(index_signal)
@@ -144,56 +144,56 @@ print(f"[SAVED] Barplot to: {barplot_path}")
 
 # --- RANGE PLOTTING FUNCTION ---
 def plot_range_widths_allparams(df, param_groups, model_type, output_dir, today_str):
-    n_params = len(param_groups)
-    fig, axes = plt.subplots(nrows=n_params, figsize=(14, 4 * n_params), sharex=False)
-    if n_params == 1: axes = [axes]
+	n_params = len(param_groups)
+	fig, axes = plt.subplots(nrows=n_params, figsize=(14, 4 * n_params), sharex=False)
+	if n_params == 1: axes = [axes]
 
-    for idx, (param, (gt_min_col, gt_max_col, pred_min_col, pred_max_col)) in enumerate(param_groups.items()):
-        ax = axes[idx]
-        labels = df["Tissue"] + "_" + df["ModeType"] + "_IR" + df["IR"].astype(int).astype(str)
-        y_pos = np.arange(len(df))
+	for idx, (param, (gt_min_col, gt_max_col, pred_min_col, pred_max_col)) in enumerate(param_groups.items()):
+		ax = axes[idx]
+		labels = df["Tissue"] + "_" + df["ModeType"] + "_IR" + df["IR"].astype(int).astype(str)
+		y_pos = np.arange(len(df))
 
-        gt_min = df[gt_min_col]
-        gt_max = df[gt_max_col]
-        pred_min = df[pred_min_col]
-        pred_max = df[pred_max_col]
+		gt_min = df[gt_min_col]
+		gt_max = df[gt_max_col]
+		pred_min = df[pred_min_col]
+		pred_max = df[pred_max_col]
 
-        ax.barh(y_pos, gt_max - gt_min, left=gt_min, height=0.4, label="GT", color='orange')
-        ax.barh(y_pos + 0.4, pred_max - pred_min, left=pred_min, height=0.4, label="Pred", color='dodgerblue')
+		ax.barh(y_pos, gt_max - gt_min, left=gt_min, height=0.4, label="GT", color='orange')
+		ax.barh(y_pos + 0.4, pred_max - pred_min, left=pred_min, height=0.4, label="Pred", color='dodgerblue')
 
-        for i in range(len(y_pos)):
-            ax.text(gt_min.iloc[i], y_pos[i], f"[{gt_min.iloc[i]:.1e}, {gt_max.iloc[i]:.1e}]", va='center', fontsize=7)
-            ax.text(pred_min.iloc[i], y_pos[i]+0.4, f"[{pred_min.iloc[i]:.1e}, {pred_max.iloc[i]:.1e}]", va='center', fontsize=7)
+		for i in range(len(y_pos)):
+			ax.text(gt_min.iloc[i], y_pos[i], f"[{gt_min.iloc[i]:.1e}, {gt_max.iloc[i]:.1e}]", va='center', fontsize=7)
+			ax.text(pred_min.iloc[i], y_pos[i]+0.4, f"[{pred_min.iloc[i]:.1e}, {pred_max.iloc[i]:.1e}]", va='center', fontsize=7)
 
-        ax.set_yticks(y_pos + 0.2)
-        ax.set_yticklabels(labels if idx == 0 else [""] * len(labels))
-        ax.set_title(f"{model_type} - {param} Range")
-        ax.set_xlabel("Parameter Range")
-        ax.grid(True, axis='x', linestyle='--', alpha=0.6)
-        ax.legend(loc='upper right')
+		ax.set_yticks(y_pos + 0.2)
+		ax.set_yticklabels(labels if idx == 0 else [""] * len(labels))
+		ax.set_title(f"{model_type} - {param} Range")
+		ax.set_xlabel("Parameter Range")
+		ax.grid(True, axis='x', linestyle='--', alpha=0.6)
+		ax.legend(loc='upper right')
 
-    plt.tight_layout()
-    save_path = os.path.join(output_dir, f"{model_type}_AllParam_RangeWidths_{today_str}.png")
-    plt.savefig(save_path)
-    plt.close()
-    print(f"[SAVED] {model_type} parameter range plot to: {save_path}")
+	plt.tight_layout()
+	save_path = os.path.join(output_dir, f"{model_type}_AllParam_RangeWidths_{today_str}.png")
+	plt.savefig(save_path)
+	plt.close()
+	print(f"[SAVED] {model_type} parameter range plot to: {save_path}")
 
 # --- 2C RANGE PLOT ---
 df_2c = df_final[df_final["ModelType"] == "2C"].copy()
 param_groups_2c = {
-    "Dpar": ("Dpar_GT_min", "Dpar_GT_max", "Dpar_Pred_min", "Dpar_Pred_max"),
-    "Dmv":  ("Dmv_GT_min", "Dmv_GT_max", "Dmv_Pred_min", "Dmv_Pred_max"),
-    "fmv":  ("fmv_GT_min", "fmv_GT_max", "fmv_Pred_min", "fmv_Pred_max")
+	"Dpar": ("Dpar_GT_min", "Dpar_GT_max", "Dpar_Pred_min", "Dpar_Pred_max"),
+	"Dmv":  ("Dmv_GT_min", "Dmv_GT_max", "Dmv_Pred_min", "Dmv_Pred_max"),
+	"fmv":  ("fmv_GT_min", "fmv_GT_max", "fmv_Pred_min", "fmv_Pred_max")
 }
 plot_range_widths_allparams(df_2c, param_groups_2c, "2C", output_dir, today_str)
 
 # --- 3C RANGE PLOT ---
 df_3c = df_final[df_final["ModelType"] == "3C"].copy()
 param_groups_3c = {
-    "Dpar": ("Dpar_GT_min", "Dpar_GT_max", "Dpar_Pred_min", "Dpar_Pred_max"),
-    "Dmv":  ("Dmv_GT_min", "Dmv_GT_max", "Dmv_Pred_min", "Dmv_Pred_max"),
-    "fmv":  ("fmv_GT_min", "fmv_GT_max", "fmv_Pred_min", "fmv_Pred_max"),
-    "Dint": ("Dint_GT_min", "Dint_GT_max", "Dint_Pred_min", "Dint_Pred_max"),
-    "fint": ("fint_GT_min", "fint_GT_max", "fint_Pred_min", "fint_Pred_max")
+	"Dpar": ("Dpar_GT_min", "Dpar_GT_max", "Dpar_Pred_min", "Dpar_Pred_max"),
+	"Dmv":  ("Dmv_GT_min", "Dmv_GT_max", "Dmv_Pred_min", "Dmv_Pred_max"),
+	"fmv":  ("fmv_GT_min", "fmv_GT_max", "fmv_Pred_min", "fmv_Pred_max"),
+	"Dint": ("Dint_GT_min", "Dint_GT_max", "Dint_Pred_min", "Dint_Pred_max"),
+	"fint": ("fint_GT_min", "fint_GT_max", "fint_Pred_min", "fint_Pred_max")
 }
 plot_range_widths_allparams(df_3c, param_groups_3c, "3C", output_dir, today_str)

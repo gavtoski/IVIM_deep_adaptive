@@ -18,81 +18,81 @@ subjects = ["S1_signal", "NAWM_signal", "WMH_signal"]
 
 # === PARAMS per model ===
 ivim_params = {
-    "2C": ["Dpar", "Dmv", "fmv"],
-    "3C": ["Dpar", "Dmv", "fmv", "Dint", "fint"]
+	"2C": ["Dpar", "Dmv", "fmv"],
+	"3C": ["Dpar", "Dmv", "fmv", "Dint", "fint"]
 }
 all_params = ["Dpar", "Dmv", "Dint", "fmv", "fint"]
 
 records = []
 
 for model in model_types:
-    model_result_root = os.path.join(result_root + model)
+	model_result_root = os.path.join(result_root + model)
 
-    for subject in subjects:
-        tissue = subject.split("_")[0]
-        subject_dir = os.path.join(model_result_root, subject)
-        if not os.path.isdir(subject_dir):
-            continue
+	for subject in subjects:
+		tissue = subject.split("_")[0]
+		subject_dir = os.path.join(model_result_root, subject)
+		if not os.path.isdir(subject_dir):
+			continue
 
-        for mode_folder in os.listdir(subject_dir):
-            mode_path = os.path.join(subject_dir, mode_folder)
-            if not os.path.isdir(mode_path):
-                continue
+		for mode_folder in os.listdir(subject_dir):
+			mode_path = os.path.join(subject_dir, mode_folder)
+			if not os.path.isdir(mode_path):
+				continue
 
-            mse_file = os.path.join(mode_path, f"global_nrmse_IVIM{model}.txt")
-            if not os.path.isfile(mse_file):
-                continue
-            with open(mse_file, 'r') as f:
-                try:
-                    nrmse_val = float(f.read().strip())
-                except ValueError:
-                    nrmse_val = None
+			mse_file = os.path.join(mode_path, f"global_nrmse_IVIM{model}.txt")
+			if not os.path.isfile(mse_file):
+				continue
+			with open(mse_file, 'r') as f:
+				try:
+					nrmse_val = float(f.read().strip())
+				except ValueError:
+					nrmse_val = None
 
-            gt_path = os.path.join(f"{data_root}_{model}_seed{seed}_{noise_mode}")
-            param_list = ivim_params[model]
-            param_errors = {f"{p}_Err": np.nan for p in all_params}
+			gt_path = os.path.join(f"{data_root}_{model}_seed{seed}_{noise_mode}")
+			param_list = ivim_params[model]
+			param_errors = {f"{p}_Err": np.nan for p in all_params}
 
-            for param in param_list:
-                gt_file = os.path.join(gt_path, f"{tissue}_{param}_synthetic.npy")
-                pred_suffix = "biexp" if model == "2C" else "triexp"
-                pred_file = os.path.join(mode_path, f"{param}_NN_{pred_suffix}.npy")
+			for param in param_list:
+				gt_file = os.path.join(gt_path, f"{tissue}_{param}_synthetic.npy")
+				pred_suffix = "biexp" if model == "2C" else "triexp"
+				pred_file = os.path.join(mode_path, f"{param}_NN_{pred_suffix}.npy")
 
-                print(f"[CHECK] GT: {os.path.basename(gt_file)} ⟷ Pred: {os.path.basename(pred_file)}")
+				print(f"[CHECK] GT: {os.path.basename(gt_file)} ⟷ Pred: {os.path.basename(pred_file)}")
 
-                if not os.path.isfile(gt_file) or not os.path.isfile(pred_file):
-                    continue
+				if not os.path.isfile(gt_file) or not os.path.isfile(pred_file):
+					continue
 
-                gt = np.load(gt_file)
-                pred = np.load(pred_file)
-                if gt.shape != pred.shape:
-                    continue
+				gt = np.load(gt_file)
+				pred = np.load(pred_file)
+				if gt.shape != pred.shape:
+					continue
 
-                nrmse = np.sqrt(np.mean((pred - gt) ** 2)) / max(np.mean(gt), 1e-6)
-                param_errors[f"{param}_Err"] = nrmse
+				nrmse = np.sqrt(np.mean((pred - gt) ** 2)) / max(np.mean(gt), 1e-6)
+				param_errors[f"{param}_Err"] = nrmse
 
-            param_nrmse_values = [v for k, v in param_errors.items() if not np.isnan(v)]
-            avg_ivim_err = np.mean(param_nrmse_values) if param_nrmse_values else np.nan
+			param_nrmse_values = [v for k, v in param_errors.items() if not np.isnan(v)]
+			avg_ivim_err = np.mean(param_nrmse_values) if param_nrmse_values else np.nan
 
-            mode_type = "Original" if "OriginalON" in mode_folder else "Adaptive"
-            if "IRFalse" in mode_folder:
-                IR = False
-            elif "IRTrue" in mode_folder:
-                IR = True
-            else:
-                IR = False
+			mode_type = "Original" if "OriginalON" in mode_folder else "Adaptive"
+			if "IRFalse" in mode_folder:
+				IR = False
+			elif "IRTrue" in mode_folder:
+				IR = True
+			else:
+				IR = False
 
-            records.append({
-                "ModelType": model,
-                "ModeType": mode_type,
-                "IR": IR,
-                "Subject": subject,
-                "Tissue": tissue,
-                "Mode": mode_folder,
-                "NRMSE": nrmse_val,
-                **param_errors,
-                "Avg_IVIM_Err": avg_ivim_err,
-                "Path": mode_path
-            })
+			records.append({
+				"ModelType": model,
+				"ModeType": mode_type,
+				"IR": IR,
+				"Subject": subject,
+				"Tissue": tissue,
+				"Mode": mode_folder,
+				"NRMSE": nrmse_val,
+				**param_errors,
+				"Avg_IVIM_Err": avg_ivim_err,
+				"Path": mode_path
+			})
 
 # === SAVE TO EXCEL ===
 df_final = pd.DataFrame(records)
@@ -119,10 +119,10 @@ fig, axes = plt.subplots(nrows=2, figsize=(12, 12), sharex=False)
 bar_width = 0.2
 
 group_colors = {
-    "Original_IR0": 'darkorange',
-    "Original_IR1": 'sandybrown',
-    "Adaptive_IR0": 'dodgerblue',
-    "Adaptive_IR1": 'skyblue'
+	"Original_IR0": 'darkorange',
+	"Original_IR1": 'sandybrown',
+	"Adaptive_IR0": 'dodgerblue',
+	"Adaptive_IR1": 'skyblue'
 }
 
 # Subplot 1: IVIM Parameter Error (Linear Scale)
@@ -130,8 +130,8 @@ index_ivim = np.arange(len(df_pivot_ivim))
 ax1 = axes[0]
 ax1.set_xscale("linear")  # Force linear for IVIM
 for i, group in enumerate(group_colors):
-    if group in df_pivot_ivim.columns:
-        ax1.barh(index_ivim + (i - 1.5) * bar_width,
+	if group in df_pivot_ivim.columns:
+		ax1.barh(index_ivim + (i - 1.5) * bar_width,
                  df_pivot_ivim[group], bar_width,
                  label=group, color=group_colors[group])
 ax1.set_yticks(index_ivim)
@@ -149,8 +149,8 @@ ax2.set_xscale("log")
 #ax2.get_xaxis().set_major_formatter(ScalarFormatter())
 
 for i, group in enumerate(group_colors):
-    if group in df_pivot_signal.columns:
-        ax2.barh(index_signal + (i - 1.5) * bar_width,
+	if group in df_pivot_signal.columns:
+		ax2.barh(index_signal + (i - 1.5) * bar_width,
                  df_pivot_signal[group], bar_width,
                  label=group, color=group_colors[group])
 ax2.set_yticks(index_signal)
