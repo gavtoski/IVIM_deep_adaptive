@@ -56,7 +56,7 @@ def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_sign
 		model_type (str): '3C' or '2C' IVIM model.
 		IR (bool): Whether IR signal model is used (only applies to '3C').
 		custom_signal_dict (dict, optional): Overrides default priors. Must be a dict of form:
-			{"NAWM": val, "WMH": val, "S1": val}
+			{"NAWM": val, "WMH": val, "mixed": val}
 
 	Returns:
 		str: One of 'NAWM', 'WMH', or 'S1' depending on signal thresholding.
@@ -65,11 +65,11 @@ def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_sign
 	# Default signal priors at b=1000
 	default_signals = {
 		"3C": {
-			False: {"NAWM": 0.5019, "WMH": 0.3664, "S1": 0.1602},
-			True:  {"NAWM": 0.1564, "WMH": 0.1162, "S1": 0.0527}
+			False: {"NAWM": 0.5019, "WMH": 0.3664, "mixed": 0.1602},
+			True:  {"NAWM": 0.1564, "WMH": 0.1162, "mixed": 0.0527}
 		},
 		"2C": {
-			False: {"NAWM": 0.3157, "WMH": 0.1673, "S1": 0.2248}
+			False: {"NAWM": 0.3157, "WMH": 0.1673, "mixed": 0.2248}
 		}
 	}
 
@@ -261,6 +261,7 @@ class Net(nn.Module):
 	# Necessary function for fine_tuning
 	# --------------------------------------------------------------------------------------------------------------
 	def compute_bval_weights(self, bvalues, phase): 
+		# USE WITH CAUTION WHEN CHANGING THE WEIGHTS
 		weights = torch.ones_like(bvalues)
 
 		if phase == 1:
@@ -269,17 +270,17 @@ class Net(nn.Module):
 
 		elif phase == 2:
 			# Phase 2: Emphasize low-b for Dmv/Fmv
-			weights[bvalues <= 100] = 1.1
+			weights[bvalues <= 100] = 1.05
 			weights[bvalues > 100] = 1.0
 
 		elif phase == 3:
 			# Phase 3: Emphasize mid-to-high b for Dpar
-			weights[bvalues > 100] = 1.1
+			weights[bvalues > 100] = 1.05
 			weights[bvalues <= 100] = 1.0
 
 		elif phase == 4:
 			# Phase 4: Emphasize mid-range for Dint/Fint
-			weights[(bvalues > 50) & (bvalues < 700)] = 1.1
+			weights[(bvalues > 50) & (bvalues < 700)] = 1.0
 			weights[(bvalues <= 50) | (bvalues >= 700)] = 1.0
 
 		return weights
@@ -498,8 +499,8 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 		if model_type == "2C":
 			return {
 				"Dpar": expand_range((0.0004, 0.0020)),
-				"Dmv":  expand_range((0.003, 0.020)),
-				"Fmv":  expand_range((0.01, 0.65))
+				"Fmv":  expand_range((0.003, 0.020)),
+				"Dmv":  expand_range((0.01, 0.65))
 			}
 
 		elif model_type == "3C":
@@ -516,8 +517,8 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 		if model_type == "2C":
 			return {
 				"Dpar": expand_range((0.00065, 0.0008)),
-				"Dmv":  expand_range((0.004, 0.015)),
-				"Fmv":  expand_range((0.2, 0.5))
+				"Fmv":  expand_range((0.004, 0.015)),
+				"Dmv":  expand_range((0.2, 0.5))
 			}
 		elif model_type == "3C":
 			prior = {
@@ -533,8 +534,8 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 		if model_type == "2C":
 			return {
 				"Dpar": expand_range((0.0010, 0.0014)),
-				"Dmv":  expand_range((0.004, 0.015)),
-				"Fmv":  expand_range((0.3, 0.6))
+				"Fmv":  expand_range((0.004, 0.015)),
+				"Dmv":  expand_range((0.3, 0.6))
 			}
 		elif model_type == "3C":
 			prior = {
@@ -991,7 +992,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	elif use_three_compartment:
 		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
 	else:  # 2C adaptive
-		padding_schedule = {1: 1.0, 2: 0.5, 3: 0.3}
+		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
 
 	if use_three_compartment:
 		param_tags = {
@@ -1054,7 +1055,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 		elif phase == 3:
 			for name, param in net.named_parameters():
 				if 'encoder0' in name or 'encoder2' in name:
-					net.encoder_soft_weights[name] = 0.03  # Dmv, Fmv
+					net.encoder_soft_weights[name] = 0.1  # Dmv, Fmv
 				elif 'encoder1' in name:
 					net.encoder_soft_weights[name] = 0.3  # Dpar
 				elif net.use_three_compartment and 'encoder3' in name:
@@ -1113,7 +1114,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	#------------------------------------------------------
 	# NETWORKS TRAINING LOOPS: MULTIPLE PARALLEL NETWORKS
 	#------------------------------------------------------
-	max_epochs_by_phase = {1: 10, 2: 6, 3: 6}
+	max_epochs_by_phase = {1: 12, 2: 6, 3: 6}
 	fine_tune_phase_epoch_counter = 0
 	loss_log = []
 	net.update_clipping_constraints(tissue_type="mixed", pad_fraction=padding_schedule.get(1, 0.3))
@@ -2419,15 +2420,15 @@ class net_pars_backup:
 
 		if model_type == "3C":
 			self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
-			if tissue_type == "mixed":
+			if tissue_type in ["mixed","S1"]:
 				self.cons_min = [0.0008, 0.16, 0.0022, 0.08, 0.032, 0.9]
 				self.cons_max = [0.0018, 0.48, 0.0048, 0.24, 0.24, 1.1]
 			elif tissue_type == "NAWM":
 				self.cons_min = [0.00050, 0.0584, 0.00212, 0.0048, 0.0736, 0.9]
-				self.cons_max = [0.00074, 0.0876, 0.00318, 0.0072, 0.1104, 1.1]
+				self.cons_max = [0.00100, 0.0876, 0.00318, 0.0072, 0.1104, 1.1]
 			elif tissue_type == "WMH":
 				self.cons_min = [0.00067, 0.14, 0.00219, 0.006, 0.0608, 0.9]
-				self.cons_max = [0.00101, 0.21, 0.00329, 0.009, 0.0912, 1.1]
+				self.cons_max = [0.00110, 0.21, 0.00329, 0.009, 0.0912, 1.1]
 			elif tissue_type == "original":
 				self.cons_min = [0.0001, 0.0,   0.000, 0.0,   0.004, 0.9]
 				self.cons_max = [0.0015, 0.40,  0.004, 0.2,   0.2,   1.1]
@@ -2437,17 +2438,16 @@ class net_pars_backup:
 		elif model_type == "2C":
 			self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
 			if tissue_type == "NAWM":
-				self.cons_min = [0.00065, 0.20, 0.004, 0.9]
-				self.cons_max = [0.00080, 0.50, 0.015, 1.1]
+				self.cons_min = [0.00045, 0.004, 0.20, 0.9]
+				self.cons_max = [0.00100, 0.015, 0.50, 1.1]
 			elif tissue_type == "WMH":
-				self.cons_min = [0.0010, 0.30, 0.004, 0.9]
-				self.cons_max = [0.0014, 0.60, 0.015, 1.1]
-			elif tissue_type == "mixed":
-				self.cons_min = [0.0004, 0.01, 0.003, 0.9]
-				self.cons_max = [0.0020, 0.65, 0.020, 1.1]
+				self.cons_min = [0.00050, 0.004, 0.30, 0.9]
+				self.cons_max = [0.00200, 0.015, 0.60, 1.1]
+			elif tissue_type in ["mixed", "S1"]:
+				self.cons_min = [0.00040, 0.003, 0.01, 0.9]
+				self.cons_max = [0.00220, 0.020, 0.65, 1.1]
 			else:
 				raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
-
 
 
 		# Pad constraint range for sigmoid scaling

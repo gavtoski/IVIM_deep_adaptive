@@ -166,7 +166,8 @@ def plot_range_widths_allparams(df, param_groups, model_type, output_dir, today_
 			ax.text(pred_min.iloc[i], y_pos[i]+0.4, f"[{pred_min.iloc[i]:.1e}, {pred_max.iloc[i]:.1e}]", va='center', fontsize=7)
 
 		ax.set_yticks(y_pos + 0.2)
-		ax.set_yticklabels(labels if idx == 0 else [""] * len(labels))
+		#ax.set_yticklabels(labels if idx == 0 else [""] * len(labels))
+		ax.set_yticklabels(labels)
 		ax.set_title(f"{model_type} - {param} Range")
 		ax.set_xlabel("Parameter Range")
 		ax.grid(True, axis='x', linestyle='--', alpha=0.6)
