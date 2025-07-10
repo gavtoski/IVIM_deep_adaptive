@@ -127,6 +127,22 @@ def plot_mean_sd_curves(signal_dict, mode, title_prefix="3C", use_color=None):
 	plt.tight_layout()
 	plt.show()
 
+def compute_avg_signals_with_std(signal_dict, mode=None):
+	avg_signals = {}
+	b1000_signals = {}
+	b1000_stds = {}
+
+	for tissue, signals in signal_dict.items():
+		sig = signals[mode] if isinstance(signals, dict) else signals
+		mean_curve = np.mean(sig, axis=0)
+		std_curve = np.std(sig, axis=0)
+
+		avg_signals[tissue] = np.mean(mean_curve)
+		b1000_signals[tissue] = mean_curve[-1]
+		b1000_stds[tissue] = std_curve[-1]
+
+	return avg_signals, b1000_signals, b1000_stds
+
 # === Main ===
 if __name__ == "__main__":
 	colors = {'NAWM': '#E69F00', 'WMH': '#009E73', 'S1': '#0072B2'}
@@ -138,14 +154,22 @@ if __name__ == "__main__":
 	sigs_2c = generate_signals_2c(N=100000)
 	plot_mean_sd_curves(sigs_2c, mode=None, title_prefix="2C", use_color=colors)
 
-	avg_signals_3c_std, avg_signals_3c_std_1000  = compute_avg_signals(sigs_3c, mode="std")
-	avg_signals_3c_ir, avg_signals_3c_ir_1000  = compute_avg_signals(sigs_3c, mode="ir")
-	avg_signals_2c, avg_signals_2c_1000     = compute_avg_signals(sigs_2c, mode=None)
+	avg_signals_3c_std, b1000_3c_std, b1000_std_3c_std = compute_avg_signals_with_std(sigs_3c, mode="std")
+	avg_signals_3c_ir, b1000_3c_ir, b1000_std_3c_ir = compute_avg_signals_with_std(sigs_3c, mode="ir")
+	avg_signals_2c, b1000_2c, b1000_std_2c = compute_avg_signals_with_std(sigs_2c, mode=None)
 
 	print("avg_signals_3c_std", avg_signals_3c_std)
 	print("avg_signals_3c_ir", avg_signals_3c_ir)
 	print("avg_signals_2c", avg_signals_2c)
 
-	print("avg_signals_3c_std at b1000", avg_signals_3c_std_1000)
-	print("avg_signals_3c_ir at b1000", avg_signals_3c_ir_1000)
-	print("avg_signals_2c at b1000", avg_signals_2c_1000)
+	print("avg_signals_3c_std at b1000 (mean ± std):")
+	for tissue in b1000_3c_std:
+		print(f"{tissue}: {b1000_3c_std[tissue]:.6f} ± {b1000_std_3c_std[tissue]:.6f}")
+
+	print("avg_signals_3c_ir at b1000 (mean ± std):")
+	for tissue in b1000_3c_ir:
+		print(f"{tissue}: {b1000_3c_ir[tissue]:.6f} ± {b1000_std_3c_ir[tissue]:.6f}")
+
+	print("avg_signals_2c at b1000 (mean ± std):")
+	for tissue in b1000_2c:
+		print(f"{tissue}: {b1000_2c[tissue]:.6f} ± {b1000_std_2c[tissue]:.6f}")

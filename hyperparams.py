@@ -56,17 +56,17 @@ class net_pars:
 		if model_type == "3C":
 			self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
 			if tissue_type in ["mixed","S1"]:
-				self.cons_min = [0.0008, 0.16, 0.0022, 0.08, 0.032, 0.9]
-				self.cons_max = [0.0018, 0.48, 0.0048, 0.24, 0.24, 1.1]
+				self.cons_min = [0.00080, 0.16, 0.0022, 0.080, 0.032, 0.9]
+				self.cons_max = [0.00180, 0.48, 0.0048, 0.240, 0.240, 1.1]
 			elif tissue_type == "NAWM":
-				self.cons_min = [0.00050, 0.0584, 0.00212, 0.0048, 0.0736, 0.9]
-				self.cons_max = [0.00100, 0.0876, 0.00318, 0.0072, 0.1104, 1.1]
+				self.cons_min = [0.00050, 0.058, 0.0021, 0.0048, 0.0736, 0.9]
+				self.cons_max = [0.00100, 0.088, 0.0032, 0.0072, 0.1100, 1.1]
 			elif tissue_type == "WMH":
-				self.cons_min = [0.00067, 0.14, 0.00219, 0.006, 0.0608, 0.9]
-				self.cons_max = [0.00110, 0.21, 0.00329, 0.009, 0.0912, 1.1]
+				self.cons_min = [0.00067, 0.14, 0.0022, 0.0060, 0.0608, 0.9]
+				self.cons_max = [0.00110, 0.21, 0.0033, 0.0090, 0.0912, 1.1]
 			elif tissue_type == "original":
-				self.cons_min = [0.0001, 0.0,   0.000, 0.0,   0.004, 0.9]
-				self.cons_max = [0.0015, 0.40,  0.004, 0.2,   0.2,   1.1]
+				self.cons_min = [0.00010, 0.00, 0.0000, 0.000, 0.004, 0.9]
+				self.cons_max = [0.00150, 0.40, 0.0040, 0.200, 0.200, 1.1]
 			else:
 				raise ValueError(f"[net_pars] Unknown 3C tissue type: {tissue_type}")
 

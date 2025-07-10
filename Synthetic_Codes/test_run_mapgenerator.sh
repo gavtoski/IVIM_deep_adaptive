@@ -5,6 +5,10 @@ MODEL_TYPE="$1"
 NOISE="${2:-nonoise}"  # Default to 'nonoise' if not provided
 TISSUE_FILTER="$3"     # Optional third argument to filter a specific tissue
 
+if [[ -z "$TISSUE_FILTER" ]]; then
+  echo "[INFO] No tissue filter specified — running all tissue types."
+fi
+
 if [[ "$MODEL_TYPE" != "2C" && "$MODEL_TYPE" != "3C" ]]; then
   echo "[USAGE] $0 <MODEL_TYPE> [NOISE_MODE] [TISSUE_TYPE]"
   echo "Example: $0 2C lownoise WMH"
@@ -54,14 +58,14 @@ for SUBJECT in "${SUBJECTS[@]}"; do
       sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
         False True "$IR" True False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
     done
-  else
+  else #2C
     dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalOFF_TuneON_FreezeON_BoostOFF_none_IRFalse_${tissue_type}"
     echo "[RUN] ${MODEL_TYPE} | Adaptive | $SUBJECT | Noise=${NOISE} | IR=False | Tissue=${tissue_type} → $dest_dir"
     sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
       False True False True False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
   fi
 
-  # === Run Original Mode (OriginalON, TuneOFF) ===
+  # === Run Original Mode (OriginalON, TuneOFF, FreezeON, BoostOFF) ===
   if [[ "$MODEL_TYPE" == "3C" ]]; then
     for IR in False True; do
       dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalON_IR${IR}_${tissue_type}"
@@ -69,7 +73,7 @@ for SUBJECT in "${SUBJECTS[@]}"; do
       sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \
         True False "$IR" False False none "$USE_3C" "$INPUT_TYPE" "$tissue_type" None
     done
-  else
+  else #2C
     dest_dir="${DEST_ROOT}/${SUBJECT}/${MODEL_TYPE}_OriginalON_IRFalse_${tissue_type}"
     echo "[RUN] ${MODEL_TYPE} | OriginalON | $SUBJECT | Noise=${NOISE} | IR=False | Tissue=${tissue_type} → $dest_dir"
     sbatch IVIM_NNsynthetic_single.sh "$PREPROC" "$VAL_LOC" "$BVALS" "$dest_dir" \

@@ -46,10 +46,6 @@ torch.manual_seed(0)
 np.random.seed(0)
 
 
-
-#################################################################### Set up priors #############################################################################
-################################################################################################################################################################
-
 # Classify tissue type, used by Net's forward fucntion
 def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_bounds_dict=None):
 	"""
@@ -93,86 +89,6 @@ def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_boun
 		# Pick closest mean if no candidates
 		return min(bounds_dict, key=lambda k: abs(signal_val - bounds_dict[k][0]))
 
-# Constraint set ups
-def expand_range(rng, buffer=0.3):
-	low, high = rng
-	width = high - low
-	return (
-		max(low - buffer * width, 1e-8),
-		high + buffer * width
-	)
-
-def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None):
-	if custom_dict is not None:
-		return custom_dict
-
-	prior = {}
-
-	if tissue_type == "mixed":
-		if model_type == "2C":
-			return {
-				"Dpar": expand_range((0.0004, 0.0020)),
-				"Fmv":  expand_range((0.003, 0.020)),
-				"Dmv":  expand_range((0.01, 0.65))
-			}
-
-		elif model_type == "3C":
-			return {
-				"Dpar":  expand_range((0.0008, 0.0018)),
-				"Dint":  expand_range((0.0022, 0.0048)),
-				"Dmv":   expand_range((0.032, 0.24)),
-				"Fmv":   expand_range((0.08, 0.24)),
-				"Fint":  expand_range((0.16, 0.48)),
-				"Ftotal": (None, 0.75)
-			}
-
-	elif tissue_type == "NAWM":
-		if model_type == "2C":
-			return {
-				"Dpar": expand_range((0.00065, 0.0008)),
-				"Fmv":  expand_range((0.004, 0.015)),
-				"Dmv":  expand_range((0.2, 0.5))
-			}
-		elif model_type == "3C":
-			prior = {
-				"Dpar":  expand_range((0.00050, 0.00074)),
-				"Dint":  expand_range((0.00212, 0.00318)),
-				"Dmv":   expand_range((0.0736, 0.1104)),
-				"Fint":  expand_range((0.0584, 0.0876)),
-				"Fmv":   expand_range((0.0048, 0.0072)),
-				"Ftotal": (None, 0.75)
-			}
-
-	elif tissue_type == "WMH":
-		if model_type == "2C":
-			return {
-				"Dpar": expand_range((0.0010, 0.0014)),
-				"Fmv":  expand_range((0.004, 0.015)),
-				"Dmv":  expand_range((0.3, 0.6))
-			}
-		elif model_type == "3C":
-			prior = {
-				"Dpar":  expand_range((0.00067, 0.00101)),
-				"Dint":  expand_range((0.00219, 0.00329)),
-				"Dmv":   expand_range((0.0608, 0.0912)),
-				"Fint":  expand_range((0.14, 0.21)),
-				"Fmv":   expand_range((0.006, 0.009)),
-				"Ftotal": (None, 0.75)
-			}
-
-	else:
-		raise ValueError(f"[ERROR] Unsupported tissue type: {tissue_type}")
-
-	POS_EPS = 1e-8
-	safe_prior = {}
-	for key, (low, high) in prior.items():
-		safe_low = POS_EPS if (low is None or low <= 0) else low
-		safe_prior[key] = (safe_low, high)
-
-	return safe_prior
-
-#################################################################### Begin of Net ##############################################################################
-################################################################################################################################################################
 
 # Define the neural network.
 class Net(nn.Module):
@@ -369,44 +285,40 @@ class Net(nn.Module):
 		return weights
 
 
-	def update_constraint_priors(tissue_labels, model_type="3C", pad_fraction=0.3):
+	def update_clipping_constraints(self, tissue_type=None, model_type=None, pad_fraction=None, IR=None):
 		"""
-		Build per-voxel constraint tensors for a given list of tissue labels.
+		Dynamically rebuild constraint clipping bounds using a fresh net_pars instance.
+		Allows phase-dependent updates and tissue/model-specific shifts.
 
 		Args:
-			tissue_labels (list of str): Length = batch_size
-			model_type (str): '2C' or '3C'
-			pad_fraction (float): Optional extra padding percentage.
-
-		Returns:
-			cons_min_tensor (torch.Tensor): Shape [batch_size, param_dim]
-			cons_max_tensor (torch.Tensor): Shape [batch_size, param_dim]
+			tissue_type (str): Override tissue type (e.g., 'WMH', 'NAWM', 'mixed')
+			model_type (str): Override model type ('2C' or '3C')
+			pad_fraction (float): Optional override of constraint padding
+			IR (bool): Optional override of IR flag
 		"""
+		tissue_type = tissue_type or self.net_pars.tissue_type
+		model_type = model_type or self.net_pars.model_type
+		IR = IR if IR is not None else self.net_pars.IR
 
-		unique_labels = set(tissue_labels)
-		prior_lookup = {}
+		updated_pars = net_pars_class(
+			model_type=model_type,
+			tissue_type=tissue_type,
+			pad_fraction=pad_fraction,
+			IR=IR
+		)
 
-		for label in unique_labels:
-			prior = constraint_prior_func(tissue_type=label, model_type=model_type)
-			padded_prior = {key: expand_range(val, buffer=pad_fraction) for key, val in prior.items()}
-			cons_min = [padded_prior[key][0] for key in sorted(padded_prior.keys())]
-			cons_max = [padded_prior[key][1] for key in sorted(padded_prior.keys())]
-			prior_lookup[label] = (cons_min, cons_max)
+		self.net_pars.cons_min = torch.tensor(updated_pars.cons_min, dtype=torch.float32, device=self.bvalues.device)
+		self.net_pars.cons_max = torch.tensor(updated_pars.cons_max, dtype=torch.float32, device=self.bvalues.device)
+		self.net_pars.tissue_type = updated_pars.tissue_type
+		self.net_pars.model_type = updated_pars.model_type
+		self.net_pars.IR = updated_pars.IR
 
-		cons_min_list = [prior_lookup[label][0] for label in tissue_labels]
-		cons_max_list = [prior_lookup[label][1] for label in tissue_labels]
-
-		cons_min_tensor = torch.tensor(cons_min_list, dtype=torch.float32)
-		cons_max_tensor = torch.tensor(cons_max_list, dtype=torch.float32)
-
-		return cons_min_tensor, cons_max_tensor
-
+		print(f"[MODEL] Clipping constraints updated → model: {model_type}, tissue: {tissue_type}, pad={pad_fraction}")
 
 	# --------------------------------------------------------------------------------------------------------------
 	# Forward function to propagate neural net/inference:
 	# --------------------------------------------------------------------------------------------------------------  
 	def forward(self, X):
-
 		# Mask only used for signal reconstruction
 		bvals = self.bvalues
 		if bvals.dim() == 1:
@@ -431,27 +343,30 @@ class Net(nn.Module):
 				Dmv_raw, Dpar_raw, Fmv_raw = [out[:, i].unsqueeze(1) for i in range(3)]
 			S0_raw = out[:, 5].unsqueeze(1) if self.net_pars.fitS0 else torch.ones_like(Dpar_raw)
 
-		# --------------------
-		# Apply constraints
-		# --------------------
+		#--------------------
+		#  Apply constraints 
+		#--------------------
+		# Get constraint function and bounds
 		if self.original_mode and (not hasattr(self.net_pars, 'con') or not self.net_pars.con):
 			self.net_pars.con = 'sigmoid'
 
+		# Determine net_pars constraints based on tissue types using b1000 signal
 		if not self.original_mode:
-			X_b1000 = X[:, -1] #Extract b1000 signal
-			tissue_labels = [
-				classify_tissue_by_signal(val.item(), model_type=self.net_pars.model_type, IR=self.net_pars.IR)
-				for val in X_b1000
-			]
+			X_b1000 = X[:, -1]  # last b-value assumed to be b=1000
+			b1000_mean = X_b1000.mean().item()
 
-			# Use default padding for forward pass
-			cmin, cmax = update_constraint_priors(tissue_labels, model_type=self.net_pars.model_type, pad_fraction=0.3)
-		else:
-			cmin = self.net_pars.cons_min.unsqueeze(0).repeat(X.shape[0], 1)
-			cmax = self.net_pars.cons_max.unsqueeze(0).repeat(X.shape[0], 1)
+			tissue_guess = classify_tissue_by_signal(
+				signal_val=b1000_mean,
+				model_type=self.net_pars.model_type,
+				IR=self.net_pars.IR
+			)
 
+			self.update_clipping_constraints(tissue_type=tissue_guess)
 
+		# Get constraints for the updated net_pars
 		con = self.net_pars.con
+		cmin = self.net_pars.cons_min
+		cmax = self.net_pars.cons_max
 
 		# Constraint function
 		def constrain(param, cmin_val, cmax_val):
@@ -467,8 +382,11 @@ class Net(nn.Module):
 				raise ValueError(f"[ERROR] Unknown constraint function: {con}")
 			return torch.clamp(val, min=0.0)
 
-		# Build raw_outputs dictionary
+
+		# Assign constrained outputs
 		raw_outputs = {}
+
+		# Constraint dictionary to call hyperparam's net_pars
 		if self.use_three_compartment:
 			raw_outputs = {
 				'Dpar': Dpar_raw,
@@ -489,15 +407,10 @@ class Net(nn.Module):
 		else:
 			raw_outputs['S0'] = torch.ones_like(Dpar_raw)
 
-		# Apply per-voxel constraints dynamically
+		# Apply constraints dynamically
 		constrained_outputs = {}
 		for i, pname in enumerate(self.net_pars.param_names):
-			constrained_outputs[pname] = constrain(
-				raw_outputs[pname],
-				cmin[:, i],
-				cmax[:, i]
-			)
-
+			constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[i], cmax[i])
 
 
 		#--------------------------------
@@ -566,6 +479,84 @@ class Net(nn.Module):
 #################################################################### End of Net ##############################################################################
 ##############################################################################################################################################################
 
+# Constraint for custom loss functions
+def expand_range(rng, buffer=0.1):
+	low, high = rng
+	width = high - low
+	return (
+		max(low - buffer * width, 1e-8),
+		high + buffer * width
+	)
+
+def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None):
+	if custom_dict is not None:
+		return custom_dict
+
+	prior = {}
+
+	if tissue_type == "mixed":
+		if model_type == "2C":
+			return {
+				"Dpar": expand_range((0.0004, 0.0020)),
+				"Fmv":  expand_range((0.003, 0.020)),
+				"Dmv":  expand_range((0.01, 0.65))
+			}
+
+		elif model_type == "3C":
+			return {
+				"Dpar":  expand_range((0.0008, 0.0018)),
+				"Dint":  expand_range((0.0022, 0.0048)),
+				"Dmv":   expand_range((0.032, 0.24)),
+				"Fmv":   expand_range((0.08, 0.24)),
+				"Fint":  expand_range((0.16, 0.48)),
+				"Ftotal": (None, 0.75)
+			}
+
+	elif tissue_type == "NAWM":
+		if model_type == "2C":
+			return {
+				"Dpar": expand_range((0.00065, 0.0008)),
+				"Fmv":  expand_range((0.004, 0.015)),
+				"Dmv":  expand_range((0.2, 0.5))
+			}
+		elif model_type == "3C":
+			prior = {
+				"Dpar":  expand_range((0.00050, 0.00074)),
+				"Dint":  expand_range((0.00212, 0.00318)),
+				"Dmv":   expand_range((0.0736, 0.1104)),
+				"Fint":  expand_range((0.0584, 0.0876)),
+				"Fmv":   expand_range((0.0048, 0.0072)),
+				"Ftotal": (None, 0.75)
+			}
+
+	elif tissue_type == "WMH":
+		if model_type == "2C":
+			return {
+				"Dpar": expand_range((0.0010, 0.0014)),
+				"Fmv":  expand_range((0.004, 0.015)),
+				"Dmv":  expand_range((0.3, 0.6))
+			}
+		elif model_type == "3C":
+			prior = {
+				"Dpar":  expand_range((0.00067, 0.00101)),
+				"Dint":  expand_range((0.00219, 0.00329)),
+				"Dmv":   expand_range((0.0608, 0.0912)),
+				"Fint":  expand_range((0.14, 0.21)),
+				"Fmv":   expand_range((0.006, 0.009)),
+				"Ftotal": (None, 0.75)
+			}
+
+	else:
+		raise ValueError(f"[ERROR] Unsupported tissue type: {tissue_type}")
+
+	POS_EPS = 1e-8
+	safe_prior = {}
+	for key, (low, high) in prior.items():
+		safe_low = POS_EPS if (low is None or low <= 0) else low
+		safe_prior[key] = (safe_low, high)
+
+	return safe_prior
+
 
 
 #################################################################### Custom Loss Functions ###################################################################
@@ -624,19 +615,20 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 		# ----------------------------
 		# Constraint penalties (2C)
 		# ----------------------------
-		X_b1000 = X_batch[:, -1]  # Extract b1000 signal value for classification
-		tissue_labels = [
-			classify_tissue_by_signal(val.item(), model_type='2C', IR=model.IR)
-			for val in X_b1000
-		]
-		pad_fraction = padding_schedule.get(phase, 0.3)
-		cmin, cmax = update_constraint_priors(tissue_labels, model_type='2C', pad_fraction=pad_fraction)
+		X_b1000 = X_batch[:,-1] # extract the b-1000 signal to determine tissue prior
+		if not model.original_mode:
+			tissue_type = classify_tissue_by_signal(
+				signal_val=X_b1000.mean().item(),
+				model_type='2C',
+				IR=model.IR
+				)
+		
+		bounds = constraint_prior_func(tissue_type=tissue_type, model_type="2C", custom_dict=custom_dict)
 
-		penalty_order = torch.mean(F.softplus(Dpar - Dmv))
-		penalty_dpar = torch.mean(F.softplus(cons_min[:, 0] - Dpar) + F.softplus(Dpar - cons_max[:, 0]))
-		penalty_fmv = torch.mean(F.softplus(cons_min[:, 1] - Fmv) + F.softplus(Fmv - cons_max[:, 1]))
-		penalty_dmv = torch.mean(F.softplus(cons_min[:, 2] - Dmv) + F.softplus(Dmv - cons_max[:, 2]))
-
+		penalty_order = torch.mean(F.softplus(Dpar - Dmv)) 
+		penalty_dpar  = torch.mean(F.softplus(bounds["Dpar"][0] - Dpar) + F.softplus(Dpar - bounds["Dpar"][1]))
+		penalty_dmv   = torch.mean(F.softplus(bounds["Dmv"][0]  - Dmv)  + F.softplus(Dmv  - bounds["Dmv"][1]))
+		penalty_fmv   = torch.mean(F.softplus(bounds["Fmv"][0]  - Fmv)  + F.softplus(Fmv  - bounds["Fmv"][1]))
 
 		viol_mask = {
 			"Dpar_low":  Dpar < 0.1e-3,
@@ -740,25 +732,25 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
 				return mse_loss, {'mse_loss': mse_loss}
 			return mse_loss
 
-		# ---------------------------------------
-		# Constraint penalties (3C) — Per-voxel
-		# ---------------------------------------
-		X_b1000 = X_batch[:, -1]  # extract b1000 signal for classification
-		tissue_labels = [
-			classify_tissue_by_signal(val.item(), model_type='3C', IR=model.IR)
-			for val in X_b1000
-		]
-		pad_fraction = padding_schedule.get(phase, 0.3)
-		cmin, cmax = update_constraint_priors(tissue_labels, model_type='3C', pad_fraction=pad_fraction)
+		#------------------------
+		# Constraint penalties
+		#------------------------
+		X_b1000 = X_batch[:,-1] # extract the b-1000 signal to determine tissue prior
+		if not model.original_mode:
+			tissue_type = classify_tissue_by_signal(
+				signal_val=X_b1000.mean().item(),
+				model_type='3C',
+				IR=model.IR
+				)
+		bounds = constraint_prior_func(tissue_type=tissue_type, model_type="3C", custom_dict=custom_dict)
 
-		penalty_order = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv))
-		penalty_dpar = torch.mean(F.softplus(cons_min[:, 0] - Dpar) + F.softplus(Dpar - cons_max[:, 0]))
-		penalty_fint = torch.mean(F.softplus(cons_min[:, 1] - Fint) + F.softplus(Fint - cons_max[:, 1]))
-		penalty_dint = torch.mean(F.softplus(cons_min[:, 2] - Dint) + F.softplus(Dint - cons_max[:, 2]))
-		penalty_fmv = torch.mean(F.softplus(cons_min[:, 3] - Fmv) + F.softplus(Fmv - cons_max[:, 3]))
-		penalty_dmv = torch.mean(F.softplus(cons_min[:, 4] - Dmv) + F.softplus(Dmv - cons_max[:, 4]))
-		penalty_ftotal = torch.mean(F.softplus(Fmv + Fint - cons_max[:, 5]))
-
+		penalty_order  = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv)) 
+		penalty_dpar   = torch.mean(F.softplus(bounds["Dpar"][0] - Dpar) + F.softplus(Dpar - bounds["Dpar"][1]))
+		penalty_dint   = torch.mean(F.softplus(bounds["Dint"][0] - Dint) + F.softplus(Dint - bounds["Dint"][1]))
+		penalty_dmv    = torch.mean(F.softplus(bounds["Dmv"][0]  - Dmv)  + F.softplus(Dmv  - bounds["Dmv"][1]))
+		penalty_fmv    = torch.mean(F.softplus(bounds["Fmv"][0]  - Fmv)  + F.softplus(Fmv  - bounds["Fmv"][1]))
+		penalty_fint   = torch.mean(F.softplus(bounds["Fint"][0] - Fint) + F.softplus(Fint - bounds["Fint"][1]))
+		penalty_ftotal = torch.mean(F.softplus(Fmv + Fint - bounds["Ftotal"][1]))
 
 		# Violation mask
 		viol_mask = {
@@ -1124,6 +1116,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	max_epochs_by_phase = {1: 12, 2: 6, 3: 6}
 	fine_tune_phase_epoch_counter = 0
 	loss_log = []
+	net.update_clipping_constraints(tissue_type="mixed", pad_fraction=padding_schedule.get(1, 0.3))
+
 
 	if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
 		## Train
@@ -1303,6 +1297,11 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							arg.train_pars.patience = 5
 							set_fine_tune_phase(net, bvalues, 2, (0, 1000), arg.train_pars.device)
 
+							#Update padfrac
+							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+							print(f"Constraint padding updated to {pad_frac}")
+							
+
 						elif fine_tune_phase == 2:
 							#if not use_three_compartment:
 							#    print("[SKIP] Phase 3 skipped for 2C model.")
@@ -1317,6 +1316,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							num_bad_epochs = 0
 							arg.train_pars.patience = 5
 							set_fine_tune_phase(net, bvalues, 3, (0, 1000), arg.train_pars.device)
+
+							#Update padfrac
+							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+							print(f"Constraint padding updated to {pad_frac}")
 							
 						elif fine_tune_phase == 3:
 							print("[PHASE 3 COMPLETE] Max epochs reached. Ending training.")
@@ -1561,6 +1564,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							num_bad_epochs = 0
 							arg.train_pars.patience = 3
 							set_fine_tune_phase(net, bvalues, 2, (0, 1000), arg.train_pars.device)
+
+							#Update padfrac
+							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+							print(f"Constraint padding updated to {pad_frac}")
 							
 						elif fine_tune_phase == 2:
 							#if not use_three_compartment:
@@ -1575,6 +1582,11 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							num_bad_epochs = 0
 							arg.train_pars.patience = 3
 							set_fine_tune_phase(net, bvalues, 3, (0, 1000), arg.train_pars.device)
+
+							#Update padfrac
+							pad_frac = padding_schedule.get(fine_tune_phase, 0.3)
+
+							print(f"Constraint padding updated to {pad_frac}")
 
 
 						elif fine_tune_phase == 3:
