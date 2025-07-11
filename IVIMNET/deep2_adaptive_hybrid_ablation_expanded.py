@@ -1143,15 +1143,15 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	#------------------------------------------------------
 	max_epochs_by_phase = {1: 12, 2: 6, 3: 6}
 	fine_tune_phase_epoch_counter = 0
-	loss_log = []
+	#loss_log = []
 
 	if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
 		## Train
 		for epoch in range(100):  
 			if original_mode:
-	            max_epochs_per_phase = 25  # Fixed large value or whatever makes sense for original_mode
-	        else:
-	            max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
+				max_epochs_per_phase = 25  # Fixed large value or whatever makes sense for original_mode
+			else:
+				max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
 
 			# Fine-tuning phase
 			if freeze_param:
@@ -1368,23 +1368,16 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 				plot_progress(X_batch.cpu(), X_pred.cpu(), bvalues.cpu(), loss_train, loss_val, arg)
 
 
-			# log and save loss_components
+			# log and save loss_components and training progress
 			if loss_components is not None:
 				penalty_log_list.append({
 					'epoch': epoch + 1,
 					'phase': fine_tune_phase,
+					'train_loss': running_loss_train,
+					'val_loss': running_loss_val,
 					**to_numpy_dict(loss_components)
 				})
 
-			# Plot training progress
-			loss_log.append({
-				"epoch": epoch + 1,
-				"phase": getattr(net, 'fine_tune_phase', 1),
-				"train_loss": running_loss_train,
-				"val_loss": running_loss_val,
-				"phase": net.fine_tune_phase  
-
-			}) # Collect plots over training
 
 	#------------------------------------------------------
 	# NETWORKS TRAINING LOOPS: SINGLE NETWORK
@@ -1392,7 +1385,11 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	else:     
 		for epoch in range(100):
 
-			max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
+			if original_mode:
+				max_epochs_per_phase = 25  # Fixed large value or whatever makes sense for original_mode
+			else:
+				max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
+
 
 			# Fine-tuning phase
 			if freeze_param:
@@ -1627,6 +1624,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 				penalty_log_list.append({
 					'epoch': epoch + 1,
 					'phase': fine_tune_phase,
+					'val_loss': running_loss_val,
 					**to_numpy_dict(loss_components)
 				})
 
@@ -1962,29 +1960,26 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 
 	# Plot 4: Final Training and Validation Loss with Phase Transitions
-	if debug == 1 and 'loss_log' in locals():
-		df_loss = pd.DataFrame(loss_log)
+	if debug == 1 and 'penalty_log_list' in locals() and len(penalty_log_list) > 0:
+		df_penalty = pd.DataFrame(penalty_log_list)
 
 		# Identify phase transitions
-		if 'phase' in df_loss.columns:
-			phase_transitions = df_loss[df_loss["phase"].diff().fillna(0) != 0]
-			vlines = (phase_transitions["epoch"]+1).tolist()
-			vlabels = [f"Phase {int(p)}" for p in phase_transitions["phase"]]
-		else:
-			vlines, vlabels = [], []
+		phase_transitions = df_penalty[df_penalty["phase"].diff().fillna(0) != 0]
+		vlines = (phase_transitions["epoch"]).tolist()
+		vlabels = [f"Phase {int(p)}" for p in phase_transitions["phase"]]
 
-		# Start plot
+		# Plot
 		plt.figure(figsize=(10, 6))
-		plt.plot(df_loss["epoch"], df_loss["train_loss"], label="Train Loss", linestyle='-', marker='o', markersize=3)
-		plt.plot(df_loss["epoch"], df_loss["val_loss"], label="Val Loss", linestyle='-', marker='s', markersize=3)
+		plt.plot(df_penalty["epoch"], df_penalty["mse_loss"], label="Train Loss", linestyle='-', marker='o', markersize=3)
+		plt.plot(df_penalty["epoch"], df_penalty["val_loss"], label="Val Loss", linestyle='-', marker='s', markersize=3)
 
-		# Add vertical phase lines with labels
-		ymax = max(df_loss["train_loss"].max(), df_loss["val_loss"].max())
+		# Phase transition lines
+		ymax = max(df_penalty["mse_loss"].max(), df_penalty["val_loss"].max())
 		for x, label in zip(vlines, vlabels):
 			plt.axvline(x=x, linestyle='--', color='gray', alpha=0.6)
 			plt.text(x + 0.2, ymax * 0.95, label, color='gray', fontsize=9, rotation=90, va='top')
 
-		# Formatting
+		# Labels and Save
 		plt.xlabel("Epoch")
 		plt.ylabel("Loss")
 		plt.title(f"Training vs Validation Loss Over Epochs\nMode: {mode_tag}, Tissue: {tissue_type}")
@@ -1992,7 +1987,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 		plt.grid(True)
 		plt.tight_layout()
 
-		# Save plot
 		save_path = os.path.join(save_dir, f"{mode_tag}_loss_curve.png")
 		plt.savefig(save_path, dpi=150)
 		print(f"[SAVED] Loss curve with phase lines: {save_path}")
