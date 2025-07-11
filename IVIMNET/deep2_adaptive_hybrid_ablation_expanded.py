@@ -267,7 +267,7 @@ class Net(nn.Module):
 			self.est_pars += 1
 
 		if not self.use_three_compartment:
-			self.net_pars.depth += 0 # can try switching to 0 or 1 if you prefer but I dont think you need
+			self.net_pars.depth += 1 # can try switching to 0 or 1 if you prefer but I dont think you need
 			print(f"Increased network depth for 2C model: depth = {self.net_pars.depth}") #2C tends to underfit
 		
 		self.freeze_param = False if original_mode else freeze_param
@@ -1007,7 +1007,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	# Pad scaling:
 	# Define schedule: (phase, pad_fraction)
 	if original_mode:
-		padding_schedule = {1: 0.3, 2: 0.3, 3: 0.3}
+		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.3}
 	elif use_three_compartment:
 		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
 	else:  # 2C adaptive
@@ -1133,7 +1133,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	#------------------------------------------------------
 	# NETWORKS TRAINING LOOPS: MULTIPLE PARALLEL NETWORKS
 	#------------------------------------------------------
-	max_epochs_by_phase = {1: 12, 2: 6, 3: 6}
+	max_epochs_by_phase = {1: 15, 2: 8, 3: 7}
 	fine_tune_phase_epoch_counter = 0
 
 	if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
