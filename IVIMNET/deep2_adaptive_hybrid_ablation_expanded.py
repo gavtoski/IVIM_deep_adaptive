@@ -94,7 +94,7 @@ def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_boun
 
 
 # This is for panding the contraints:
-def expand_range(rng, buffer=0.3):
+def expand_range(rng, buffer=0.1):
 	low, high = rng
 	width = high - low
 	return (
@@ -684,7 +684,7 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 		# ------------------------------------------------------
 		# Compute total loss
 		# ------------------------------------------------------
-		penalty_scale = 0.2 * mse_loss.detach()
+		penalty_scale = mse_loss.detach()
 		raw_penalty = order_term + fmv_term + mag_term
 		scaled_constraint_loss = torch.min(raw_penalty, penalty_scale)
 		total_loss = mse_loss + scaled_constraint_loss
