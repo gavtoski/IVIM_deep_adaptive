@@ -1009,9 +1009,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	if original_mode:
 		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.3}
 	elif use_three_compartment:
-		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
+		padding_schedule = {1: 1, 2: 0.5, 3: 0.3}
 	else:  # 2C adaptive
-		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.25}
+		padding_schedule = {1: 1, 2: 0.5, 3: 0.3}
 
 	if use_three_compartment:
 		param_tags = {
@@ -1037,59 +1037,46 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	def freeze_encoder_by_phase(net, phase):
 		"""
 		Applies phase-specific soft freezing strategy to the IVIM model.
-		- Phase 1: All parameters trainable
-		- Phase 2: Dpar (encoder1) focus; others softly scaled
-		- Phase 3: Dmv (encoder0) focus; soft updates to Dpar, Fmv, Fint if applicable
-		- Phase 4: All parameters trainable
+		2C: encoder0 = Dmv, encoder1 = Dpar
+		3C: encoder0 = Dmv, encoder1 = Dpar, encoder2 = Fmv, encoder3 = Dint, encoder4 = Fint
 		"""
-
-		# Initialize or clear soft freeze dict
 		net.encoder_soft_weights = {}
 
+		# Unfreeze all if freeze_param is off
 		if not getattr(net, 'freeze_param', False):
 			for name, param in net.named_parameters():
 				param.requires_grad = True
 			print(f"[PHASE {phase}] freeze_param=False → All parameters trainable.")
 			return
 
-		# Default: all trainable
+		# Default requires_grad=True before soft freezing
 		for name, param in net.named_parameters():
 			param.requires_grad = True
 
-		if phase == 1:
-			print("[PHASE 1] All parameters trainable.")
-
-		elif phase == 2:
-			for name, param in net.named_parameters():
-				if 'encoder0' in name or 'encoder2' in name:
-					net.encoder_soft_weights[name] = 0.3  # Dmv, Fmv
-				elif 'encoder1' in name:
-					net.encoder_soft_weights[name] = 0.1  # Dpar
-				elif net.use_three_compartment and 'encoder3' in name:
-					net.encoder_soft_weights[name] = 0.1  # Dint
-				elif net.use_three_compartment and 'encoder4' in name:
-					net.encoder_soft_weights[name] = 0.1  # Fint
-			print("[PHASE 2] Focusing on Dmv, Fmv, Dint, Fint — soft update")
-
-		elif phase == 3:
-			for name, param in net.named_parameters():
-				if 'encoder0' in name or 'encoder2' in name:
-					net.encoder_soft_weights[name] = 0.15  # Dmv, Fmv
-				elif 'encoder1' in name:
-					net.encoder_soft_weights[name] = 0.3  # Dpar
-				elif net.use_three_compartment and 'encoder3' in name:
-					net.encoder_soft_weights[name] = 0.15  # Dint
-				elif net.use_three_compartment and 'encoder4' in name:
-					net.encoder_soft_weights[name] = 0.15  # Fint
-
-			print("[PHASE 3] Focusing on Dpar and finally signal tuning")
-
-
-		elif phase == 4:
-			print("[PHASE 4] Final tuning — all parameters trainable.")
-
+		# Set phase-specific weights
+		if net.use_three_compartment:
+			weight_sets = {
+				1: {},
+				2: {'encoder0': 0.3, 'encoder1': 0.1, 'encoder2': 0.3, 'encoder3': 0.1, 'encoder4': 0.1},
+				3: {'encoder0': 0.15, 'encoder1': 0.3, 'encoder2': 0.15, 'encoder3': 0.15, 'encoder4': 0.15},
+				4: {}
+			}
+			print(f"[PHASE {phase}] 3C phase tuning applied.")
 		else:
-			print(f"[WARNING] Unknown phase {phase}. No changes made.")
+			weight_sets = {
+				1: {},
+				2: {'encoder0': 0.3, 'encoder1': 0.1},
+				3: {'encoder0': 0.15, 'encoder1': 0.3},
+				4: {}
+			}
+			print(f"[PHASE {phase}] 2C phase tuning applied.")
+
+		# Apply weights
+		weights = weight_sets.get(phase, {})
+		for name, param in net.named_parameters():
+			for key, value in weights.items():
+				if key in name:
+					net.encoder_soft_weights[name] = value
 
 
 	def set_fine_tune_phase(net, bvalues, phase, bval_range, device='cpu'):
