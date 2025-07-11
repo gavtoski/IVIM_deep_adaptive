@@ -39,7 +39,7 @@ class train_pars:
 
 
 class net_pars:
-	def __init__(self, model_type="3C", tissue_type="mixed", pad_fraction=None, IR=False):
+	def __init__(self, model_type="3C", tissue_type="mixed", pad_fraction=0.3, IR=False):
 		self.model_type = model_type
 		self.tissue_type = tissue_type
 
@@ -90,7 +90,7 @@ class net_pars:
 
 		# Padded constraints
 		if pad_fraction is None:
-			pad_fraction = 0.5 if tissue_type in ["mixed", "original"] else 0.3
+			pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
 
 		range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
 		self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)

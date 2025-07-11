@@ -267,7 +267,7 @@ class Net(nn.Module):
 			self.est_pars += 1
 
 		if not self.use_three_compartment:
-			self.net_pars.depth += 1 # can try switching to 0 if you prefer but I dont think you need
+			self.net_pars.depth += 0 # can try switching to 0 or 1 if you prefer but I dont think you need
 			print(f"Increased network depth for 2C model: depth = {self.net_pars.depth}") #2C tends to underfit
 		
 		self.freeze_param = False if original_mode else freeze_param
@@ -401,11 +401,12 @@ class Net(nn.Module):
 	def forward(self, X):
 
 		# Mask only used for signal reconstruction
-		bvals = self.bvalues
+		bvals = self.bvalues.to(X.device).view(1, -1)  # Ensure shape [1, n_bvals]
 		if bvals.dim() == 1:
 			bvals = bvals.view(1, -1)
 		if self.training and hasattr(self, 'bval_mask'):
 			bvals = bvals[:, self.bval_mask]
+
 
 		#  Run encoders
 		if self.net_pars.parallel:
@@ -440,7 +441,7 @@ class Net(nn.Module):
 			]
 
 			# Use default padding for forward pass
-			cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=pad_fraction)
+			cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=0.3)
 			assert self.net_pars.param_names == param_order, "param_names mismatch!"
 
 
@@ -449,7 +450,6 @@ class Net(nn.Module):
 				expected_dim = 6
 			else:
 				expected_dim = 4
-			print(f"[DEBUG] model_type: {model_type}, cmin.shape: {cmin.shape}, use_three_compartment: {self.use_three_compartment}")
 			assert cmin.shape[1] == expected_dim
 
 		else:
@@ -460,17 +460,23 @@ class Net(nn.Module):
 
 		# Constraint function
 		def constrain(param, cmin_val, cmax_val):
-			if con == 'sigmoid':
-				val = cmin_val + torch.sigmoid(param) * (cmax_val - cmin_val)
-			elif con == 'abs':
-				val = torch.abs(param)
-			elif con == 'sigmoidabs':
-				val = torch.abs(cmin_val + torch.sigmoid(param) * (cmax_val - cmin_val))
-			elif con == 'none':
-				val = param
-			else:
-				raise ValueError(f"[ERROR] Unknown constraint function: {con}")
-			return torch.clamp(val, min=0.0)
+		    if cmin_val.ndim == 1:
+		        cmin_val = cmin_val.unsqueeze(1)
+		    if cmax_val.ndim == 1:
+		        cmax_val = cmax_val.unsqueeze(1)
+
+		    if con == 'sigmoid':
+		        val = cmin_val + torch.sigmoid(param) * (cmax_val - cmin_val)
+		    elif con == 'abs':
+		        val = torch.abs(param)
+		    elif con == 'sigmoidabs':
+		        val = torch.abs(cmin_val + torch.sigmoid(param) * (cmax_val - cmin_val))
+		    elif con == 'none':
+		        val = param
+		    else:
+		        raise ValueError(f"[ERROR] Unknown constraint function: {con}")
+		    return torch.clamp(val, min=0.0)
+
 
 		# Build raw_outputs dictionary
 		raw_outputs = {}
@@ -582,7 +588,8 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 	boost_mse_by_phase=False,
 	ablate_option=None,
 	tissue_type="mixed",
-	custom_dict=None):
+	custom_dict=None,
+	padding_schedule=None):
 
 	#---------------------
 	# Calculating mse loss
@@ -633,16 +640,18 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 			classify_tissue_by_signal(val.item(), model_type='2C', IR=model.IR)
 			for val in X_b1000
 		]
-		pad_fraction = padding_schedule.get(phase, 0.3)
-		cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=pad_fraction)
+		
+		if padding_schedule is not None:
+			pad_fraction = padding_schedule.get(phase, 0.3)
+		else:
+			pad_fraction = 0.3
+		cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type='2C', pad_fraction=pad_fraction)
 		assert model.net_pars.param_names == param_order, "param_names mismatch!" #Safety check
 
-
 		penalty_order = torch.mean(F.softplus(Dpar - Dmv))
-		penalty_dpar = torch.mean(F.softplus(cons_min[:, 0] - Dpar) + F.softplus(Dpar - cons_max[:, 0]))
-		penalty_fmv = torch.mean(F.softplus(cons_min[:, 1] - Fmv) + F.softplus(Fmv - cons_max[:, 1]))
-		penalty_dmv = torch.mean(F.softplus(cons_min[:, 2] - Dmv) + F.softplus(Dmv - cons_max[:, 2]))
-
+		penalty_dpar = torch.mean(F.softplus(cmin[:, 0] - Dpar) + F.softplus(Dpar - cmax[:, 0]))
+		penalty_fmv  = torch.mean(F.softplus(cmin[:, 1] - Fmv)  + F.softplus(Fmv  - cmax[:, 1]))
+		penalty_dmv  = torch.mean(F.softplus(cmin[:, 2] - Dmv)  + F.softplus(Dmv  - cmax[:, 2]))
 
 		viol_mask = {
 			"Dpar_low":  Dpar < 0.1e-3,
@@ -702,7 +711,8 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
 	boost_mse_by_phase=False,
 	ablate_option=None, 
 	tissue_type="mixed",
-	custom_dict=None
+	custom_dict=None,
+	padding_schedule=None
 	):
 	
 	#---------------------
@@ -754,20 +764,21 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
 			classify_tissue_by_signal(val.item(), model_type='3C', IR=model.IR)
 			for val in X_b1000
 		]
-		pad_fraction = padding_schedule.get(phase, 0.3)
-		cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=pad_fraction)
+
+		if padding_schedule is not None:
+			pad_fraction = padding_schedule.get(phase, 0.3)
+		else:
+			pad_fraction = 0.3
+		cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type='3C', pad_fraction=pad_fraction)
 		assert model.net_pars.param_names == param_order, "param_names mismatch!"
 
-
-
 		penalty_order = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv))
-		penalty_dpar = torch.mean(F.softplus(cons_min[:, 0] - Dpar) + F.softplus(Dpar - cons_max[:, 0]))
-		penalty_fint = torch.mean(F.softplus(cons_min[:, 1] - Fint) + F.softplus(Fint - cons_max[:, 1]))
-		penalty_dint = torch.mean(F.softplus(cons_min[:, 2] - Dint) + F.softplus(Dint - cons_max[:, 2]))
-		penalty_fmv = torch.mean(F.softplus(cons_min[:, 3] - Fmv) + F.softplus(Fmv - cons_max[:, 3]))
-		penalty_dmv = torch.mean(F.softplus(cons_min[:, 4] - Dmv) + F.softplus(Dmv - cons_max[:, 4]))
-		penalty_ftotal = torch.mean(F.softplus(Fmv + Fint - cons_max[:, 5]))
-
+		penalty_dpar = torch.mean(F.softplus(cmin[:, 0] - Dpar) + F.softplus(Dpar - cmax[:, 0]))
+		penalty_fint = torch.mean(F.softplus(cmin[:, 1] - Fint) + F.softplus(Fint - cmax[:, 1]))
+		penalty_dint = torch.mean(F.softplus(cmin[:, 2] - Dint) + F.softplus(Dint - cmax[:, 2]))
+		penalty_fmv = torch.mean(F.softplus(cmin[:, 3] - Fmv) + F.softplus(Fmv - cmax[:, 3]))
+		penalty_dmv = torch.mean(F.softplus(cmin[:, 4] - Dmv) + F.softplus(Dmv - cmax[:, 4]))
+		penalty_ftotal = torch.mean(F.softplus(Fmv + Fint - cmax[:, 5]))
 
 		# Violation mask
 		viol_mask = {
@@ -1137,7 +1148,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
 		## Train
 		for epoch in range(100):  
-			max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
+			if original_mode:
+	            max_epochs_per_phase = 25  # Fixed large value or whatever makes sense for original_mode
+	        else:
+	            max_epochs_per_phase = max_epochs_by_phase.get(fine_tune_phase, 10)
 
 			# Fine-tuning phase
 			if freeze_param:
@@ -1173,7 +1187,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 						boost_mse_by_phase=boost_toggle,
 						ablate_option=ablate_option,
 						tissue_type=tissue_type, 
-						custom_dict=custom_dict
+						custom_dict=custom_dict,
+						padding_schedule=padding_schedule
 					)
 				else:
 					loss_output = custom_loss_function_2C(
@@ -1184,7 +1199,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 						boost_mse_by_phase=boost_toggle,
 						ablate_option=ablate_option,
 						tissue_type=tissue_type, 
-						custom_dict=custom_dict
+						custom_dict=custom_dict,
+						padding_schedule=padding_schedule
 					)
 
 				# Unpack if dictionary is returned (debug=1)
@@ -1251,7 +1267,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							boost_mse_by_phase=boost_toggle,
 							ablate_option=ablate_option,
 							tissue_type=tissue_type, 
-							custom_dict=custom_dict
+							custom_dict=custom_dict,
+							padding_schedule=padding_schedule
 							)
 					else:
 						loss = custom_loss_function_2C(X_pred, X_batch, Dpar_pred, Dmv_pred, Fmv_pred, net,
@@ -1260,7 +1277,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							boost_mse_by_phase=boost_toggle,
 							ablate_option=ablate_option,
 							tissue_type=tissue_type, 
-							custom_dict=custom_dict
+							custom_dict=custom_dict,
+							padding_schedule=padding_schedule
 							)
 
 					running_loss_val += loss.item()
@@ -1415,7 +1433,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 						boost_mse_by_phase=boost_toggle,
 						ablate_option=ablate_option,
 						tissue_type=tissue_type, 
-						custom_dict=custom_dict 
+						custom_dict=custom_dict,
+						padding_schedule=padding_schedule 
 					)
 				else:
 					loss_output = custom_loss_function_2C(
@@ -1426,7 +1445,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 						boost_mse_by_phase=boost_toggle,
 						ablate_option=ablate_option,
 						tissue_type=tissue_type, 
-						custom_dict=custom_dict
+						custom_dict=custom_dict,
+						padding_schedule=padding_schedule
 					)
 
 				# Unpack if dictionary is returned (debug=1)
@@ -1505,7 +1525,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							boost_mse_by_phase=boost_toggle,
 							ablate_option=ablate_option,
 							tissue_type=tissue_type, 
-							custom_dict=custom_dict 
+							custom_dict=custom_dict,
+							padding_schedule=padding_schedule 
 						)
 					else:
 						loss = custom_loss_function_2C(
@@ -1516,7 +1537,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 							boost_mse_by_phase=boost_toggle,
 							ablate_option=ablate_option,
 							tissue_type=tissue_type, 
-							custom_dict=custom_dict
+							custom_dict=custom_dict,
+							padding_schedule=padding_schedule
 						)
 					running_loss_val += loss.item()
 
@@ -1647,7 +1669,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	mode_tag += f"_b{bval_len}"
 
 	# Encode tissue type
-	true_tissue_type = getattr(arg, 'tissue_type', 'mixed')
+	true_tissue_type = tissue_type
 	if true_tissue_type in ['NAWM', 'WMH', 'mixed']:
 		mode_tag += f"_{true_tissue_type}"
 
@@ -1986,7 +2008,9 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 		torch.cuda.empty_cache()
 	return net
 
+####################################################################### End of learn_IVIM ################################################################
 
+####################################################################### Net essentials ###################################################################
 def load_optimizer(net, arg):
 	par_list = []
 
@@ -2162,7 +2186,9 @@ def predict_IVIM(data, bvalues, net, arg):
 	else:
 		raise ValueError(f"Unknown model type: {model_type}")
 
+####################################################################### End of Net essentials ###################################################################
 
+####################################################################### Legacy/Backup forargs ###################################################################
 
 def isnan(x):
 	""" this program indicates what are NaNs  """
@@ -2275,9 +2301,9 @@ def checkarg_net_pars(arg):
 	if not hasattr(arg, 'width'):
 		warnings.warn('arg.net_pars.width not defined. Using default of 0 (auto width)')
 		arg.width = 0
-	if not hasattr(arg, 'profile'):
-		warnings.warn('arg.net_pars.profile not defined. Using fallback "brain3_mixed"')
-		arg.profile = "brain3_mixed"
+	#if not hasattr(arg, 'profile'):
+	#	warnings.warn('arg.net_pars.profile not defined. Using fallback "brain3_mixed"')
+	#	arg.profile = "brain3_mixed"
 
 	# Precise constraint setup
 	if not hasattr(arg, 'cons_min') or not hasattr(arg, 'cons_max'):
@@ -2288,7 +2314,6 @@ def checkarg_net_pars(arg):
 			model_type=arg.model_type,
 			tissue_type=arg.tissue_type
 			)
-
 
 		arg.cons_min = precise_net_pars.cons_min
 		arg.cons_max = precise_net_pars.cons_max
@@ -2325,12 +2350,12 @@ def checkarg_sim(arg):
 
 def checkarg(arg):
 	if not hasattr(arg, 'fig'):
-		warnings.warn('arg.fig not defined. Using default of False')
+		#warnings.warn('arg.fig not defined. Using default of False')
 		arg.fig = False
 
-	if not hasattr(arg, 'save_name'):
-		warnings.warn('arg.save_name not defined. Defaulting to "brain3_mixed"')
-		arg.save_name = 'brain3_mixed'
+	#if not hasattr(arg, 'save_name'):
+	#	warnings.warn('arg.save_name not defined. Defaulting to "brain3_mixed"')
+	#	arg.save_name = 'brain3_mixed'
 
 
 	# Sync use_three_compartment and tissue_type from net_pars
@@ -2339,7 +2364,7 @@ def checkarg(arg):
 
 	# Build net_pars first, which sets profile, use_three_compartment, and tissue_type
 	if not hasattr(arg, 'net_pars'):
-		warnings.warn(f'arg.net_pars not defined. Using net_pars(profile="{arg.save_name}")')
+		warnings.warn(f'arg.net_pars not defined. Using net_pars default setting)')
 		arg.net_pars = net_pars_backup(use_three_compartment=arg.use_three_compartment, tissue_type="mixed")
 
 	if not hasattr(arg, 'tissue_type'):
@@ -2347,8 +2372,8 @@ def checkarg(arg):
 
 	# Training Parameters
 	if not hasattr(arg, 'train_pars'):
-		warnings.warn(f'arg.train_pars not defined. Using train_pars(profile="{arg.save_name}")')
-		arg.train_pars = train_pars_backup(arg.save_name)
+		warnings.warn(f'arg.train_pars not defined. Using net_pars default setting")')
+		arg.train_pars = train_pars_backup()
 
 	# Fit Method 
 	if not hasattr(arg, 'fit'):
@@ -2370,19 +2395,13 @@ def checkarg(arg):
 	arg.train_pars = checkarg_train_pars(arg.train_pars)
 	arg.sim = checkarg_sim(arg.sim)
 
-	# Debug Output
-	print(f"[CHECKARG] Using profile: {arg.net_pars.profile} | 3C: {arg.use_three_compartment}")
-	print(f"[CHECKARG] cons_min: {np.round(arg.net_pars.cons_min, 6)}")
-	print(f"[CHECKARG] cons_max: {np.round(arg.net_pars.cons_max, 6)}")
-	print(f"[CHECKARG] param_names: {arg.net_pars.param_names}")
-
 	return arg
 
 
 
 
 class train_pars_backup:
-	def __init__(self,nets):
+	def __init__(self):
 		self.optim='adam' #these are the optimisers implementd. Choices are: 'sgd'; 'sgdr'; 'adagrad' adam
 		self.lr = 0.00005 # this is the learning rate.
 		self.patience= 30 # this is the number of epochs without improvement that the network waits untill determining it found its optimum

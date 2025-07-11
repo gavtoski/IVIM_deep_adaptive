@@ -241,7 +241,8 @@ class map_generator_NN():
 
 				signal = (1 if norm else S0[..., None]) * (num / denom)
 
-		return signal / signal[..., 0]
+		return signal / signal[..., [0]]
+
 
 
 
@@ -292,7 +293,7 @@ class map_generator_NN():
 		bval_len = len(self.bvalues)
 		mode_tag += f"_b{bval_len}"
 
-		true_tissue_type = getattr(self.arg, 'tissue_type', 'mixed')
+		true_tissue_type = self.tissue_type
 		if true_tissue_type in ['NAWM', 'WMH', 'mixed']:
 			mode_tag += f"_{true_tissue_type}"
 
