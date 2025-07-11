@@ -508,8 +508,6 @@ class Net(nn.Module):
 		    else:
 		        constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[i], cmax[i])
 
-
-
 		#--------------------------------
 		# Reconstruct predicted signal
 		#--------------------------------
@@ -924,21 +922,15 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 		print(f"[INIT] Using {'3C' if use_three_compartment else '2C'} IVIM model architecture")
 
-	# Inject noise into weights (only if not original mode)
-	if not original_mode:
-		def perturb_model_initialization(model, std=0.03):
-			with torch.no_grad():
-				for param in model.parameters():
-					if param.requires_grad:
-						param.add_(torch.randn_like(param) * std)
+	# Inject noise into weights 
+	def perturb_model_initialization(model, std=0.03):
+		with torch.no_grad():
+			for param in model.parameters():
+				if param.requires_grad:
+					param.add_(torch.randn_like(param) * std)
 
-		print("[NOISE] Injecting noise into model weights")
-		perturb_model_initialization(net, std=0.03)
-
-
-	else:
-		# if a network was used as input parameter, work with that network instead (transfer learning/warm start).
-		net.to(arg.train_pars.device)
+	print("[NOISE] Injecting noise into model weights")
+	perturb_model_initialization(net, std=0.03)
 
 	# splitting data into learning and validation set; subsequently initialising the Dataloaders
 	split = int(np.floor(len(X_train) * arg.train_pars.split))
@@ -1354,7 +1346,13 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 
 				else:
 					print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
+					
+
+			if original_mode:
+				if epoch + 1 >= max_epochs_per_phase:
+					print(f"[ORIGINAL MODE] Max epochs {max_epochs_per_phase} reached. Ending training.")
 					break
+
 			
 			#---------------------
 			# Phase tuning ends 
@@ -1382,7 +1380,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	# NETWORKS TRAINING LOOPS: SINGLE NETWORK
 	#------------------------------------------------------
 	else:     
-		for epoch in range(100):
+		for epoch in range(30):
 
 			if original_mode:
 				max_epochs_per_phase = 25  # Fixed large value or whatever makes sense for original_mode
@@ -1614,6 +1612,12 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 				else:
 					print("[ORIGINAL MODE] No fine-tuning allowed. Exiting training.")
 					break
+
+			if original_mode:
+				if epoch + 1 >= max_epochs_per_phase:
+					print(f"[ORIGINAL MODE] Max epochs {max_epochs_per_phase} reached. Ending training.")
+					break
+
 
 			#---------------------
 			# Phase tuning ends
@@ -2405,58 +2409,65 @@ class train_pars_backup:
 
 
 class net_pars_backup:
-	def __init__(self, use_three_compartment=True, tissue_type="mixed"):
-		self.tissue_type = tissue_type
-		self.use_three_compartment = use_three_compartment
-		self.model_type = "3C" if use_three_compartment else "2C"
-
+	def __init__(self, model_type="3C", tissue_type="mixed", pad_fraction=0.3, original=False):
+		
 		# Architecture settings
 		self.dropout = 0.1
 		self.batch_norm = True
 		self.parallel = True
-		self.con = 'sigmoid'
+		self.con = 'sigmoidabs'
 		self.fitS0 = True
 		self.depth = 2
-		self.width = 0  # use auto-width based on b-values
+		self.width = 0
+		self.model_type = model_type
+
+		if original:
+		    self.tissue_type = "original"
+		else:
+		    self.tissue_type = tissue_type
+
 
 		if model_type == "3C":
 			self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
-			if tissue_type in ["mixed","S1"]:
+			if self.tissue_type in ["mixed","S1"]:
 				self.cons_min = [0.00080, 0.16, 0.0022, 0.080, 0.032, 0.9]
 				self.cons_max = [0.00180, 0.48, 0.0048, 0.240, 0.240, 1.1]
-			elif tissue_type == "NAWM":
+			elif self.tissue_type == "NAWM":
 				self.cons_min = [0.00050, 0.058, 0.0021, 0.0048, 0.0736, 0.9]
 				self.cons_max = [0.00100, 0.088, 0.0032, 0.0072, 0.1100, 1.1]
-			elif tissue_type == "WMH":
+			elif self.tissue_type == "WMH":
 				self.cons_min = [0.00067, 0.14, 0.0022, 0.0060, 0.0608, 0.9]
 				self.cons_max = [0.00110, 0.21, 0.0033, 0.0090, 0.0912, 1.1]
-			elif tissue_type == "original":
+			elif self.tissue_type == "original":
 				self.cons_min = [0.00010, 0.00, 0.0000, 0.000, 0.004, 0.9]
 				self.cons_max = [0.00150, 0.40, 0.0040, 0.200, 0.200, 1.1]
 			else:
-				raise ValueError(f"[net_pars] Unknown 3C tissue type: {tissue_type}")
+				raise ValueError(f"[net_pars] Unknown 3C tissue type: {self.tissue_type}")
 
 		elif model_type == "2C":
 			self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
-			if tissue_type == "NAWM":
+			if self.tissue_type == "NAWM":
 				self.cons_min = [0.00045, 0.004, 0.20, 0.9]
 				self.cons_max = [0.00100, 0.015, 0.50, 1.1]
-			elif tissue_type == "WMH":
+			elif self.tissue_type == "WMH":
 				self.cons_min = [0.00050, 0.004, 0.30, 0.9]
 				self.cons_max = [0.00200, 0.015, 0.60, 1.1]
-			elif tissue_type in ["mixed", "S1"]:
+			elif self.tissue_type in ["mixed", "S1", "original"]:
 				self.cons_min = [0.00040, 0.003, 0.01, 0.9]
 				self.cons_max = [0.00220, 0.020, 0.65, 1.1]
 			else:
-				raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
+				raise ValueError(f"[net_pars] Unknown 2C tissue type: {self.tissue_type}")
 
+		else:
+			raise ValueError(f"[net_pars] Unknown model_type: {model_type}")
 
-		# Pad constraint range for sigmoid scaling
-		pad_fraction = 0.5 if tissue_type in ["mixed", "original"] else 0.3
+		# Padded constraints
+		if pad_fraction is None:
+			pad_fraction = 0.5 if self.tissue_type in ["mixed", "original"] else 0.5
+
 		range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
 		self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
 		self.cons_max = np.array(self.cons_max) + range_pad
-
 
 
 class lsqfit:

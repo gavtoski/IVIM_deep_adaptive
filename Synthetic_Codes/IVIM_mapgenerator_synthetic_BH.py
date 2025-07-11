@@ -474,11 +474,12 @@ if __name__ == "__main__":
 	# Determine model and tissue config
 	model_type = "3C" if args.use_three_compartment else "2C"
 	tissue_type = "mixed" if args.original_mode else args.tissue_type
+	original_mode_flag = True if args.original_mode else False
 
 	print('\n[INFO] Loading hyperparams with model/tissue...\n')
 
 	# Load full hyperparameter object
-	arg = hp(model_type=model_type, tissue_type=tissue_type, IR=args.IR)
+	arg = hp(model_type=model_type, tissue_type=tissue_type, IR=args.IR, original=original_mode_flag)
 
 	# Set any training-specific flags
 	arg.use_three_compartment = args.use_three_compartment
@@ -488,6 +489,9 @@ if __name__ == "__main__":
 
 	# Assign destination directory for training outputs
 	arg.train_pars.dest_dir = args.dest_dir
+
+	# Set orignal flag
+	arg.original = original_mode_flag
 
 	print(vars(arg.train_pars))
 	print(f"[CONFIG] Using model_type: {model_type}, tissue_type: {tissue_type}, IR: {args.IR}")

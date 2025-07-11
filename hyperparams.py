@@ -39,10 +39,8 @@ class train_pars:
 
 
 class net_pars:
-	def __init__(self, model_type="3C", tissue_type="mixed", pad_fraction=0.3, IR=False):
-		self.model_type = model_type
-		self.tissue_type = tissue_type
-
+	def __init__(self, model_type="3C", tissue_type="mixed", pad_fraction=0.3, IR=False, original=False):
+		
 		# Architecture settings
 		self.dropout = 0.1
 		self.batch_norm = True
@@ -52,45 +50,51 @@ class net_pars:
 		self.IR = IR
 		self.depth = 2
 		self.width = 0
+		self.model_type = model_type
+
+		if original:
+		    self.tissue_type = "original"
+		else:
+		    self.tissue_type = tissue_type
+
 
 		if model_type == "3C":
 			self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
-			if tissue_type in ["mixed","S1"]:
+			if self.tissue_type in ["mixed","S1"]:
 				self.cons_min = [0.00080, 0.16, 0.0022, 0.080, 0.032, 0.9]
 				self.cons_max = [0.00180, 0.48, 0.0048, 0.240, 0.240, 1.1]
-			elif tissue_type == "NAWM":
+			elif self.tissue_type == "NAWM":
 				self.cons_min = [0.00050, 0.058, 0.0021, 0.0048, 0.0736, 0.9]
 				self.cons_max = [0.00100, 0.088, 0.0032, 0.0072, 0.1100, 1.1]
-			elif tissue_type == "WMH":
+			elif self.tissue_type == "WMH":
 				self.cons_min = [0.00067, 0.14, 0.0022, 0.0060, 0.0608, 0.9]
 				self.cons_max = [0.00110, 0.21, 0.0033, 0.0090, 0.0912, 1.1]
-			elif tissue_type == "original":
+			elif self.tissue_type == "original":
 				self.cons_min = [0.00010, 0.00, 0.0000, 0.000, 0.004, 0.9]
 				self.cons_max = [0.00150, 0.40, 0.0040, 0.200, 0.200, 1.1]
 			else:
-				raise ValueError(f"[net_pars] Unknown 3C tissue type: {tissue_type}")
+				raise ValueError(f"[net_pars] Unknown 3C tissue type: {self.tissue_type}")
 
 		elif model_type == "2C":
 			self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
-			if tissue_type == "NAWM":
+			if self.tissue_type == "NAWM":
 				self.cons_min = [0.00045, 0.004, 0.20, 0.9]
 				self.cons_max = [0.00100, 0.015, 0.50, 1.1]
-			elif tissue_type == "WMH":
+			elif self.tissue_type == "WMH":
 				self.cons_min = [0.00050, 0.004, 0.30, 0.9]
 				self.cons_max = [0.00200, 0.015, 0.60, 1.1]
-			elif tissue_type in ["mixed", "S1"]:
+			elif self.tissue_type in ["mixed", "S1", "original"]:
 				self.cons_min = [0.00040, 0.003, 0.01, 0.9]
 				self.cons_max = [0.00220, 0.020, 0.65, 1.1]
 			else:
-				raise ValueError(f"[net_pars] Unknown 2C tissue type: {tissue_type}")
-
+				raise ValueError(f"[net_pars] Unknown 2C tissue type: {self.tissue_type}")
 
 		else:
 			raise ValueError(f"[net_pars] Unknown model_type: {model_type}")
 
 		# Padded constraints
 		if pad_fraction is None:
-			pad_fraction = 0.3 if tissue_type in ["mixed", "original"] else 0.25
+			pad_fraction = 0.5 if self.tissue_type in ["mixed", "original"] else 0.5 # bigger pad for orignal since it's a hard uniform clipping and not voxel based intensity
 
 		range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
 		self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)
@@ -133,15 +137,17 @@ class rel_times:
 		self.inversiontime = 2230 # ms
 		
 class hyperparams:
-	def __init__(self, model_type="3C", tissue_type="mixed", IR=False):
+	def __init__(self, model_type="3C", tissue_type="mixed", IR=False, original=False):
 		self.model_type = model_type
 		self.tissue_type = tissue_type
 		self.use_three_compartment = model_type == "3C"
+		self.original = original
+		self.IR = IR
 
 		profile_model = "brain3" if model_type == "3C" else "brain2"
-		profile = f"{profile_model}_{tissue_type}"
+		self.profile = f"{profile_model}"
 		self.train_pars = train_pars()
-		self.net_pars = net_pars(model_type=model_type, tissue_type=tissue_type, IR=IR)
+		self.net_pars = net_pars(model_type=self.model_type, tissue_type=self.tissue_type, IR=self.IR, original=self.original)
 		self.fit = lsqfit()
 		self.sim = sim()
 		self.rel_times = rel_times()
