@@ -1143,7 +1143,6 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	#------------------------------------------------------
 	max_epochs_by_phase = {1: 12, 2: 6, 3: 6}
 	fine_tune_phase_epoch_counter = 0
-	#loss_log = []
 
 	if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
 		## Train
@@ -1624,17 +1623,10 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 				penalty_log_list.append({
 					'epoch': epoch + 1,
 					'phase': fine_tune_phase,
+					'train_loss': running_loss_train,
 					'val_loss': running_loss_val,
 					**to_numpy_dict(loss_components)
 				})
-
-			# Plot training progress
-			loss_log.append({
-				"epoch": epoch + 1,
-				"phase": fine_tune_phase,
-				"train_loss": running_loss_train,
-				"val_loss": running_loss_val
-			})
 
 
 	#------------------------------------------------------
