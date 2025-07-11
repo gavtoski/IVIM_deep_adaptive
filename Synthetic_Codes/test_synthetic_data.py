@@ -49,19 +49,18 @@ def generate_signal_3c(params, bvals, IR=False, noise_mode="nonoise"):
 	bvals = np.array(bvals)[None, :]
 
 	if not IR:
-		S = (fpar * np.exp(-bvals * Dpar) +
-             fint * np.exp(-bvals * Dint) +
-             fmv  * np.exp(-bvals * Dmv))
+		S = fpar * np.exp(-bvals * Dpar) + fint * np.exp(-bvals * Dint) + fmv * np.exp(-bvals * Dmv)
+		S = S / S[:, [0]]
 	else:
 		S = (
-			fpar * (1 - 2 * np.exp(-TI / T1_tissue) + np.exp(-TR / T1_tissue)) *
-			np.exp(-TE / T2_tissue - bvals * Dpar) +
-			fint * (1 - 2 * np.exp(-TI / T1_isf) + np.exp(-TR / T1_isf)) *
-			np.exp(-TE / T2_isf - bvals * Dint) +
+			fpar * (1 - 2 * np.exp(-TI / T1_tissue) + np.exp(-TR / T1_tissue)) * np.exp(-TE / T2_tissue - bvals * Dpar) +
+			fint * (1 - 2 * np.exp(-TI / T1_isf) + np.exp(-TR / T1_isf)) * np.exp(-TE / T2_isf - bvals * Dint) +
 			fmv * np.exp(-bvals * Dmv)
 		)
+		S = S / S[:, [0]]
 
 	return add_rician_noise(S, bvals, noise_mode)
+
 
 def generate_signal_2c(params, bvals, noise_mode="nonoise"):
 	Dpar = params["Dpar"][:, None]
@@ -71,6 +70,7 @@ def generate_signal_2c(params, bvals, noise_mode="nonoise"):
 	bvals = np.array(bvals)[None, :]
 
 	S = fpar * np.exp(-bvals * Dpar) + fmv * np.exp(-bvals * Dmv)
+	S = S / S[:, [0]]
 	return add_rician_noise(S, bvals, noise_mode)
 
 def sample_param_tensor(range_dict, N):

@@ -72,71 +72,60 @@ class map_generator_NN():
 		print(self.arg.subject_tag)
 
 	def load_and_preproc_data(self):
-		# Load and reorder b-values
-		bval_txt = np.genfromtxt(self.bvalues_path)
-		self.bvalues_raw = np.array(bval_txt)
+		# Load b-values 
+		self.bvalues_raw = np.genfromtxt(self.bvalues_path).astype(float)
 		self.n_b_values = len(self.bvalues_raw)
 
-		# Determine sorting order using TRAIN input (assume train and val has the same format, they should)
+		# Load train data
 		if self.input_type == "image":
 			self.data = nib.load(self.train_input_path)
-			train_vol = self.data.get_fdata()  # Shape: [X, Y, Z, B]
-			self.sx, self.sy, self.sz, _ = train_vol.shape
-			mean_signals = np.mean(train_vol.reshape(-1, self.n_b_values), axis=0)
-		elif self.input_type == "array":
-			train_vol = np.load(self.train_input_path)  # Shape: [N, B]
-			mean_signals = np.mean(train_vol, axis=0)
+			train_data = self.data.get_fdata()  # Shape: [X, Y, Z, B]
+			self.sx, self.sy, self.sz, _ = train_data.shape
+			train_flat = train_data.reshape(-1, self.n_b_values)
 		else:
-			raise ValueError(f"[ERROR] Unsupported input_type: {self.input_type}")
+			train_data = np.load(self.train_input_path)  # Shape: [N, B]
+			train_flat = train_data.copy()
 
+		# Sort b-values descending by mean signal
+		mean_signals = np.nanmean(train_flat, axis=0)
 		self.sorted_indices = np.argsort(mean_signals)[::-1]
 		self.bvalues = self.bvalues_raw[self.sorted_indices]
-		self.selsb = self.bvalues == 0
+		self.selsb = self.bvalues == 0  # Identify b=0 after sorting
 
-		# Subfunction to clean data
-		def clean_and_normalize(data, label):
-			if self.input_type == "image":
-				data = data[..., self.sorted_indices]
-				flat = data.reshape(-1, self.n_b_values)
-			else:
-				flat = data[:, self.sorted_indices]
+		train_flat = train_flat[:, self.sorted_indices]
 
-			# Filter: voxels with strong S0
-			S0 = np.nanmean(flat[:, self.selsb], axis=1)
-			S0[S0 == 0] = np.nan
-			valid = S0 > 0.5 * np.nanmedian(S0[S0 > 0])
-			filtered = flat[valid]
-			S0_filtered = np.nanmean(filtered[:, self.selsb], axis=1).astype('<f')
-			norm = filtered / S0_filtered[:, None]
+		# Normalize train data by S0 
+		S0_train = np.nanmean(train_flat[:, self.selsb], axis=1)
+		S0_train[S0_train == 0] = np.nan
+		valid_train = S0_train > 0.5 * np.nanmedian(S0_train[S0_train > 0])
+		self.datatot_train = (train_flat[valid_train] / S0_train[valid_train, None]).astype('<f')
+		self.valid_id_train = valid_train
 
-			print(f"[INFO] {label}: {norm.shape[0]} voxels retained")
-			return norm, valid
+		print(f"[INFO] Train: {self.datatot_train.shape[0]} voxels retained")
 
-		# Clean training data 
-		print(f"[INFO] Preprocessing training data from {self.train_input_path}")
-		if self.input_type == "image":
-			train_data = self.data.get_fdata()
-		else:
-			train_data = np.load(self.train_input_path)
-		self.datatot_train, self.valid_id_train = clean_and_normalize(train_data, "Train")
-
-		# Clean validation data
-		print(f"[INFO] Preprocessing validation data from {self.val_input_path}")
+		#Load and normalize validation data
 		if self.input_type == "image":
 			val_data = nib.load(self.val_input_path).get_fdata()
+			val_flat = val_data.reshape(-1, self.n_b_values)
 		else:
-			val_data = np.load(self.val_input_path)
-		
-		self.datatot_val, self.valid_id_val = clean_and_normalize(val_data, "Val")
+			val_flat = np.load(self.val_input_path)
 
-		# Post-filter summary
+		val_flat = val_flat[:, self.sorted_indices]  # Same ordering as training
+
+		S0_val = np.nanmean(val_flat[:, self.selsb], axis=1)
+		S0_val[S0_val == 0] = np.nan
+		valid_val = S0_val > 0.5 * np.nanmedian(S0_val[S0_val > 0])
+		self.datatot_val = (val_flat[valid_val] / S0_val[valid_val, None]).astype('<f')
+		self.valid_id_val = valid_val
+
+		print(f"[INFO] Val: {self.datatot_val.shape[0]} voxels retained")
+
+		# Final check
 		print(f"[INFO] Voxel summary — Train: {self.datatot_train.shape[0]} | Val: {self.datatot_val.shape[0]}")
 		if self.datatot_train.shape[0] == 0:
 			raise ValueError("[ERROR] No valid voxels in training set after S0 filtering.")
 		if self.datatot_val.shape[0] == 0:
 			raise ValueError("[ERROR] No valid voxels in validation set after S0 filtering.")
-
-
 
 
 	def train_NN(self):
@@ -252,7 +241,7 @@ class map_generator_NN():
 
 				signal = (1 if norm else S0[..., None]) * (num / denom)
 
-		return signal
+		return signal / signal[..., 0]
 
 
 

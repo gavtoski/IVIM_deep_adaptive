@@ -50,7 +50,6 @@ np.random.seed(0)
 #################################################################### Set up priors #############################################################################
 ################################################################################################################################################################
 
-# Classify tissue type, used by Net's forward fucntion
 def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_bounds_dict=None):
 	"""
 	Classifies tissue based on signal_val using mean ± std ranges.
@@ -68,11 +67,11 @@ def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_boun
 
 	default_bounds = {
 		"3C": {
-			False: {"NAWM": (0.5019, 0.0346), "WMH": (0.3664, 0.0357), "mixed": (0.1602, 0.0513)},
-			True:  {"NAWM": (0.1564, 0.0107), "WMH": (0.1162, 0.0111), "mixed": (0.0527, 0.0161)}
+			False: {"NAWM": (0.5022, 0.0347), "WMH": (0.3665, 0.0359), "mixed": (0.1605, 0.0512)},
+			True:  {"NAWM": (0.4718, 0.0328), "WMH": (0.3240, 0.0323), "mixed": (0.1070, 0.0373)}
 		},
 		"2C": {
-			False: {"NAWM": (0.3157, 0.0442), "mixed": (0.2251, 0.1219), "WMH": (0.1676, 0.0325)}
+			False: {"NAWM": (0.3157, 0.0440), "mixed": (0.2257, 0.1224), "WMH": (0.1676, 0.0326)}
 		}
 	}
 
@@ -93,7 +92,8 @@ def classify_tissue_by_signal(signal_val, model_type="3C", IR=False, custom_boun
 		# Pick closest mean if no candidates
 		return min(bounds_dict, key=lambda k: abs(signal_val - bounds_dict[k][0]))
 
-# Constraint set ups
+
+# This is for panding the contraints:
 def expand_range(rng, buffer=0.3):
 	low, high = rng
 	width = high - low
@@ -106,32 +106,31 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 	if custom_dict is not None:
 		return custom_dict
 
-	prior = {}
-
 	if tissue_type == "mixed":
 		if model_type == "2C":
-			return {
+			prior = {
 				"Dpar": expand_range((0.0004, 0.0020)),
 				"Fmv":  expand_range((0.003, 0.020)),
-				"Dmv":  expand_range((0.01, 0.65))
+				"Dmv":  expand_range((0.01, 0.65)),
+				"S0":   (0.9, 1.1)
 			}
-
 		elif model_type == "3C":
-			return {
+			prior = {
 				"Dpar":  expand_range((0.0008, 0.0018)),
 				"Dint":  expand_range((0.0022, 0.0048)),
 				"Dmv":   expand_range((0.032, 0.24)),
 				"Fmv":   expand_range((0.08, 0.24)),
 				"Fint":  expand_range((0.16, 0.48)),
-				"Ftotal": (None, 0.75)
+				"Ftotal": (None, 0.75),
+				"S0":    (0.9, 1.1)
 			}
-
 	elif tissue_type == "NAWM":
 		if model_type == "2C":
-			return {
+			prior = {
 				"Dpar": expand_range((0.00065, 0.0008)),
 				"Fmv":  expand_range((0.004, 0.015)),
-				"Dmv":  expand_range((0.2, 0.5))
+				"Dmv":  expand_range((0.2, 0.5)),
+				"S0":   (0.9, 1.1)
 			}
 		elif model_type == "3C":
 			prior = {
@@ -140,15 +139,16 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 				"Dmv":   expand_range((0.0736, 0.1104)),
 				"Fint":  expand_range((0.0584, 0.0876)),
 				"Fmv":   expand_range((0.0048, 0.0072)),
-				"Ftotal": (None, 0.75)
+				"Ftotal": (None, 0.75),
+				"S0":    (0.9, 1.1)
 			}
-
 	elif tissue_type == "WMH":
 		if model_type == "2C":
-			return {
+			prior = {
 				"Dpar": expand_range((0.0010, 0.0014)),
 				"Fmv":  expand_range((0.004, 0.015)),
-				"Dmv":  expand_range((0.3, 0.6))
+				"Dmv":  expand_range((0.3, 0.6)),
+				"S0":   (0.9, 1.1)
 			}
 		elif model_type == "3C":
 			prior = {
@@ -157,9 +157,9 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 				"Dmv":   expand_range((0.0608, 0.0912)),
 				"Fint":  expand_range((0.14, 0.21)),
 				"Fmv":   expand_range((0.006, 0.009)),
-				"Ftotal": (None, 0.75)
+				"Ftotal": (None, 0.75),
+				"S0":    (0.9, 1.1)
 			}
-
 	else:
 		raise ValueError(f"[ERROR] Unsupported tissue type: {tissue_type}")
 
@@ -170,6 +170,33 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 		safe_prior[key] = (safe_low, high)
 
 	return safe_prior
+
+
+
+def update_constraint_priors(tissue_labels, model_type="3C", pad_fraction=0.3):
+	# Build per-voxel constraint tensors for a given list of tissue labels.
+
+	unique_labels = set(tissue_labels)
+	prior_lookup = {}
+
+	param_order = ["Dpar", "Fmv", "Dmv", "S0"] if model_type == "2C" else ["Dpar", "Fint", "Dint", "Fmv", "Dmv", "S0"]
+
+	for label in unique_labels:
+		prior = constraint_prior_func(tissue_type=label, model_type=model_type)
+		padded_prior = {key: expand_range(val, buffer=pad_fraction) for key, val in prior.items()}
+		cons_min = [padded_prior[key][0] for key in param_order]
+		cons_max = [padded_prior[key][1] for key in param_order]
+		prior_lookup[label] = (cons_min, cons_max)
+
+	cons_min_list = [prior_lookup[label][0] for label in tissue_labels]
+	cons_max_list = [prior_lookup[label][1] for label in tissue_labels]
+
+	cons_min_tensor = torch.tensor(cons_min_list, dtype=torch.float32)
+	cons_max_tensor = torch.tensor(cons_max_list, dtype=torch.float32)
+
+	return cons_min_tensor, cons_max_tensor, param_order
+
+
 
 #################################################################### Begin of Net ##############################################################################
 ################################################################################################################################################################
@@ -368,40 +395,6 @@ class Net(nn.Module):
 
 		return weights
 
-
-	def update_constraint_priors(tissue_labels, model_type="3C", pad_fraction=0.3):
-		"""
-		Build per-voxel constraint tensors for a given list of tissue labels.
-
-		Args:
-			tissue_labels (list of str): Length = batch_size
-			model_type (str): '2C' or '3C'
-			pad_fraction (float): Optional extra padding percentage.
-
-		Returns:
-			cons_min_tensor (torch.Tensor): Shape [batch_size, param_dim]
-			cons_max_tensor (torch.Tensor): Shape [batch_size, param_dim]
-		"""
-
-		unique_labels = set(tissue_labels)
-		prior_lookup = {}
-
-		for label in unique_labels:
-			prior = constraint_prior_func(tissue_type=label, model_type=model_type)
-			padded_prior = {key: expand_range(val, buffer=pad_fraction) for key, val in prior.items()}
-			cons_min = [padded_prior[key][0] for key in sorted(padded_prior.keys())]
-			cons_max = [padded_prior[key][1] for key in sorted(padded_prior.keys())]
-			prior_lookup[label] = (cons_min, cons_max)
-
-		cons_min_list = [prior_lookup[label][0] for label in tissue_labels]
-		cons_max_list = [prior_lookup[label][1] for label in tissue_labels]
-
-		cons_min_tensor = torch.tensor(cons_min_list, dtype=torch.float32)
-		cons_max_tensor = torch.tensor(cons_max_list, dtype=torch.float32)
-
-		return cons_min_tensor, cons_max_tensor
-
-
 	# --------------------------------------------------------------------------------------------------------------
 	# Forward function to propagate neural net/inference:
 	# --------------------------------------------------------------------------------------------------------------  
@@ -436,6 +429,8 @@ class Net(nn.Module):
 		# --------------------
 		if self.original_mode and (not hasattr(self.net_pars, 'con') or not self.net_pars.con):
 			self.net_pars.con = 'sigmoid'
+		
+		model_type = "3C" if self.use_three_compartment else "2C"
 
 		if not self.original_mode:
 			X_b1000 = X[:, -1] #Extract b1000 signal
@@ -445,12 +440,22 @@ class Net(nn.Module):
 			]
 
 			# Use default padding for forward pass
-			cmin, cmax = update_constraint_priors(tissue_labels, model_type=self.net_pars.model_type, pad_fraction=0.3)
+			cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=pad_fraction)
+			assert self.net_pars.param_names == param_order, "param_names mismatch!"
+
+
+			# Check dim 
+			if self.use_three_compartment:
+				expected_dim = 6
+			else:
+				expected_dim = 4
+			print(f"[DEBUG] model_type: {model_type}, cmin.shape: {cmin.shape}, use_three_compartment: {self.use_three_compartment}")
+			assert cmin.shape[1] == expected_dim
+
 		else:
-			cmin = self.net_pars.cons_min.unsqueeze(0).repeat(X.shape[0], 1)
-			cmax = self.net_pars.cons_max.unsqueeze(0).repeat(X.shape[0], 1)
-
-
+			cmin = torch.tensor(self.net_pars.cons_min, dtype=torch.float32, device=X.device)
+			cmax = torch.tensor(self.net_pars.cons_max, dtype=torch.float32, device=X.device)
+	
 		con = self.net_pars.con
 
 		# Constraint function
@@ -492,11 +497,10 @@ class Net(nn.Module):
 		# Apply per-voxel constraints dynamically
 		constrained_outputs = {}
 		for i, pname in enumerate(self.net_pars.param_names):
-			constrained_outputs[pname] = constrain(
-				raw_outputs[pname],
-				cmin[:, i],
-				cmax[:, i]
-			)
+		    if not self.original_mode:
+		        constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[:, i], cmax[:, i])
+		    else:
+		        constrained_outputs[pname] = constrain(raw_outputs[pname], cmin[i], cmax[i])
 
 
 
@@ -630,7 +634,9 @@ def custom_loss_function_2C(X_pred, X_batch, Dpar, Dmv, Fmv, model,
 			for val in X_b1000
 		]
 		pad_fraction = padding_schedule.get(phase, 0.3)
-		cmin, cmax = update_constraint_priors(tissue_labels, model_type='2C', pad_fraction=pad_fraction)
+		cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=pad_fraction)
+		assert model.net_pars.param_names == param_order, "param_names mismatch!" #Safety check
+
 
 		penalty_order = torch.mean(F.softplus(Dpar - Dmv))
 		penalty_dpar = torch.mean(F.softplus(cons_min[:, 0] - Dpar) + F.softplus(Dpar - cons_max[:, 0]))
@@ -749,7 +755,10 @@ def custom_loss_function(X_pred, X_batch, Dpar, Dmv, Dint, Fmv, Fint, model,
 			for val in X_b1000
 		]
 		pad_fraction = padding_schedule.get(phase, 0.3)
-		cmin, cmax = update_constraint_priors(tissue_labels, model_type='3C', pad_fraction=pad_fraction)
+		cmin, cmax, param_order = update_constraint_priors(tissue_labels, model_type=model_type, pad_fraction=pad_fraction)
+		assert model.net_pars.param_names == param_order, "param_names mismatch!"
+
+
 
 		penalty_order = torch.mean(F.softplus(Dpar - Dint) + F.softplus(Dint - Dmv))
 		penalty_dpar = torch.mean(F.softplus(cons_min[:, 0] - Dpar) + F.softplus(Dpar - cons_max[:, 0]))
