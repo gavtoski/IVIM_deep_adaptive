@@ -62,7 +62,7 @@ class net_pars:
 			self.param_names = ['Dpar', 'Fint', 'Dint', 'Fmv', 'Dmv', 'S0']
 			if self.tissue_type in ["mixed","S1"]:
 				self.cons_min = [0.00010, 0.16, 0.0022, 0.080, 0.032, 0.9]
-				self.cons_max = [0.00150, 0.48, 0.0048, 0.240, 0.240, 1.1]
+				self.cons_max = [0.00165, 0.48, 0.0048, 0.240, 0.240, 1.1]
 			elif self.tissue_type == "NAWM":
 				self.cons_min = [0.00050, 0.058, 0.0021, 0.0048, 0.0736, 0.9]
 				self.cons_max = [0.00100, 0.088, 0.0032, 0.0072, 0.1100, 1.1]
@@ -78,13 +78,13 @@ class net_pars:
 		elif model_type == "2C":
 			self.param_names = ['Dpar', 'Fmv', 'Dmv', 'S0']
 			if self.tissue_type == "NAWM":
-				self.cons_min = [0.00025, 0.004, 0.20, 0.9]
-				self.cons_max = [0.00100, 0.015, 0.50, 1.1]
+				self.cons_min = [0.00065, 0.004, 0.20, 0.9]
+				self.cons_max = [0.00080, 0.015, 0.50, 1.1]
 			elif self.tissue_type == "WMH":
-				self.cons_min = [0.00025, 0.004, 0.30, 0.9]
-				self.cons_max = [0.00150, 0.015, 0.60, 1.1]
+				self.cons_min = [0.00100, 0.004, 0.30, 0.9]
+				self.cons_max = [0.00140, 0.015, 0.60, 1.1]
 			elif self.tissue_type in ["mixed", "S1", "original"]:
-				self.cons_min = [0.00020, 0.003, 0.01, 0.9]
+				self.cons_min = [0.00040, 0.003, 0.01, 0.9]
 				self.cons_max = [0.00200, 0.020, 0.65, 1.1]
 			else:
 				raise ValueError(f"[net_pars] Unknown 2C tissue type: {self.tissue_type}")
@@ -95,9 +95,9 @@ class net_pars:
 		# Padded constraints
 		if pad_fraction is None:
 			if model_type == "3C":
-				pad_fraction = 1.0 if self.tissue_type in ["mixed", "original"] else 0.3 
+				pad_fraction = 0.5 if self.tissue_type in ["mixed", "original"] else 0.5 
 			else:
-				pad_fraction = 1.0 if self.tissue_type in ["mixed", "original"] else 0.5 # 
+				pad_fraction = 0.5 if self.tissue_type in ["mixed", "original"] else 0.5 # 
 
 		range_pad = pad_fraction * (np.array(self.cons_max) - np.array(self.cons_min))
 		self.cons_min = np.clip(np.array(self.cons_min) - range_pad, a_min=0, a_max=None)

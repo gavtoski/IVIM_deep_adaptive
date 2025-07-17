@@ -31,7 +31,7 @@ import argparse
 class map_generator_NN():
 
 	def __init__(self, train_input_path, bvalues_path, dest_dir, arg, pre_trained_net=None, original_mode=False, weight_tuning= False, IR=False, freeze_param= False,
-				 boost_toggle=True, ablate_option=None, use_three_compartment=False, input_type="image",tissue_type="mixed", custom_dict=None, val_input_path=None):
+				 boost_toggle=True, ablate_option=None, use_three_compartment=False, input_type="image",tissue_type="mixed", custom_dict=None, val_input_path=None, GT_path=None):
 		self.train_input_path = train_input_path
 		self.bvalues_path = bvalues_path
 		self.arg = arg
@@ -50,10 +50,20 @@ class map_generator_NN():
 		
 		if val_input_path is None:
 			self.val_input_path = train_input_path
-			print("[WARNING]: validation set missing — defaulting to training set for validation")
+			print("[WARNING]: validation set missing — defaulting to training set for validation (not recommended)")
 		else:
 			self.val_input_path = val_input_path
 			print("[INFO]: Using customized validation set")
+
+		if GT_path is None and val_input_path is None :
+			self.GT_path = train_input_path
+			print("[WARNING]: GT data set missing — defaulting to training set for GT")
+		elif GT_path is None and val_input_path is not None:
+			self.GT_path = val_input_path
+			print("[WARNING]: GT data set missing — defaulting to validation set for GT")
+		else:
+			self.GT_path = GT_path
+			print("[INFO]: Using customized GT set to calculate NRMSE error")
 
 
 		if not hasattr(arg, 'net_pars') or arg.net_pars is None:
@@ -112,12 +122,30 @@ class map_generator_NN():
 
 		val_flat = val_flat[:, self.sorted_indices]  # Same ordering as training
 
+		# Validation data normalization
 		S0_val = np.nanmean(val_flat[:, self.selsb], axis=1)
 		S0_val[S0_val == 0] = np.nan
 		valid_val = S0_val > 0.5 * np.nanmedian(S0_val[S0_val > 0])
 		self.datatot_val = (val_flat[valid_val] / S0_val[valid_val, None]).astype('<f')
 		self.valid_id_val = valid_val
 
+		#Load and normalize GT data
+		if self.input_type == "image":
+			GT_data = nib.load(self.GT_path).get_fdata()
+			GT_flat = GT_data.reshape(-1, self.n_b_values)
+		else:
+			GT_flat = np.load(self.GT_path)
+
+		GT_flat = GT_flat[:, self.sorted_indices]  # Same ordering as training 
+
+		#GT Normalization
+		S0_GT = np.nanmean(GT_flat[:, self.selsb], axis=1)
+		S0_GT[S0_GT == 0] = np.nan
+		valid_GT = S0_GT > 0.5 * np.nanmedian(S0_GT[S0_GT > 0])
+		self.datatot_GT = (GT_flat[valid_GT] / S0_GT[valid_GT, None]).astype('<f')
+		self.valid_id_GT = valid_GT
+
+		print(f"[INFO] GT: {self.datatot_GT.shape[0]} voxels retained")
 		print(f"[INFO] Val: {self.datatot_val.shape[0]} voxels retained")
 
 		# Final check
@@ -126,6 +154,8 @@ class map_generator_NN():
 			raise ValueError("[ERROR] No valid voxels in training set after S0 filtering.")
 		if self.datatot_val.shape[0] == 0:
 			raise ValueError("[ERROR] No valid voxels in validation set after S0 filtering.")
+		if self.datatot_GT.shape[0] == 0:
+			raise ValueError("[ERROR] No valid voxels in GT set after S0 filtering.")
 
 
 	def train_NN(self):
@@ -250,7 +280,8 @@ class map_generator_NN():
 		today = datetime.today().strftime("%Y-%m-%d")
 
 		# Use preprocessed, normalized val data
-		S_original = self.datatot_val.copy()
+		S_original = self.datatot_GT.copy()
+		S_original_plot = self.datatot_val.copy() # Want to see how well they fit the validation data given the noise
 		S_reconstructed = np.nan_to_num(IVIM_reconstructed, nan=0)
 
 		# Align masks
@@ -330,7 +361,7 @@ class map_generator_NN():
 		else:
 			idx_voxel = S_original.shape[0] // 2
 
-		true_signal_voxel = S_original[idx_voxel]
+		true_signal_voxel = S_original_plot[idx_voxel]
 		reconstructed_signal_voxel = S_reconstructed[idx_voxel]
 
 		b_values = np.sort(self.bvalues.flatten())
@@ -365,14 +396,14 @@ class map_generator_NN():
 		# [INFERENCE] Run inference on VAL data 
 		start_time = time.time()
 		paramsNN = deep2.predict_IVIM(self.datatot_val, self.bvalues, self.net, self.arg)
+
+		# [MODEL SAVING PARAMS] Define model type and parameter names
+		model_type = "3C" if self.use_three_compartment else "2C"
 		elapsed_time = time.time() - start_time
 		print(f"\nTime elapsed for Net inference: {elapsed_time:.2f} seconds\n")
 
 		if self.arg.train_pars.use_cuda:
 			torch.cuda.empty_cache()
-
-		# [MODEL SAVING PARAMS] Define model type and parameter names
-		model_type = "3C" if self.use_three_compartment else "2C"
 
 		names = {
 			"3C": ['Dpar_NN_triexp', 'fmv_NN_triexp', 'Dmv_NN_triexp', 'Dint_NN_triexp', 'fint_NN_triexp', 'S0_NN_triexp'],
@@ -457,6 +488,7 @@ if __name__ == "__main__":
 	parser.add_argument('--input_type', type=str, required=True, help='image or array input')
 	parser.add_argument('--tissue_type', type=str, required=True, help='tissue type: mixed, NAWM, or WMH')
 	parser.add_argument('--val_loc', type=str, required=True, help='Path to the validation data')
+	parser.add_argument('--GT_loc', type=str, required=True, help='Path to the GT data')
 
 	# Handle custom constraint bounds
 	def parse_custom_dict(val):
@@ -473,7 +505,7 @@ if __name__ == "__main__":
 
 	# Determine model and tissue config
 	model_type = "3C" if args.use_three_compartment else "2C"
-	tissue_type = "mixed" if args.original_mode else args.tissue_type
+	tissue_type = "original" if args.original_mode else args.tissue_type
 	original_mode_flag = True if args.original_mode else False
 
 	print('\n[INFO] Loading hyperparams with model/tissue...\n')
@@ -499,6 +531,7 @@ if __name__ == "__main__":
 	# Run IVIM prediction
 	IVIM_object = map_generator_NN(
 		train_input_path=args.train_loc,
+		GT_path=args.GT_loc,
 		bvalues_path=args.bval_path,
 		dest_dir=args.dest_dir,
 		arg=arg,
@@ -512,7 +545,7 @@ if __name__ == "__main__":
 		input_type=args.input_type,
 		tissue_type=args.tissue_type,
 		custom_dict=args.custom_dict,
-		val_input_path=args.val_loc
+		val_input_path=args.val_loc,
 	)
 
 	IVIM_object.predict_IVIM_maps()

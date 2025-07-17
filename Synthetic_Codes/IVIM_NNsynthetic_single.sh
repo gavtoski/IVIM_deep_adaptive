@@ -17,26 +17,28 @@ eval "$(/scratch/nhoang2/bin/micromamba shell hook --shell=bash)"
 micromamba activate pytorch2
 
 # Usage instructions
-if [ "$#" -lt 9 ]; then
-    echo "[USAGE] $0 <train_loc> <val_loc> <bval_path> <dest_dir> <original_mode> <weight_tuning> <IR> <freeze_param> <boost_toggle> [ablate_option] [use_three_compartment] [input_type] [tissue_type] [custom_dict]"
+if [ "$#" -lt 10 ]; then
+    echo "[USAGE] $0 <train_loc> <val_loc> <GT_loc> <bval_path> <dest_dir> <original_mode> <weight_tuning> <IR> <freeze_param> <boost_toggle> [ablate_option] [use_three_compartment] [input_type] [tissue_type] [custom_dict]"
     exit 1
 fi
+
 
 # Parse inputs 
 train_loc="$1"
 val_loc="$2"
-bval_path="$3"
-dest_dir="$4"
-original_mode="$5"
-weight_tuning="$6"
-IR="$7"
-freeze_param="$8"
-boost_toggle="$9"
-ablate_option="${10:-none}"
-use_three_compartment="${11:-True}"
-input_type="${12:-array}"
-tissue_type="${13:-mixed}"
-custom_dict="${14:-None}"
+GT_loc="$3"
+bval_path="$4"
+dest_dir="$5"
+original_mode="$6"
+weight_tuning="$7"
+IR="$8"
+freeze_param="$9"
+boost_toggle="${10:-none}"
+ablate_option="${11:-none}"
+use_three_compartment="${12:-True}"
+input_type="${13:-array}"
+tissue_type="${14:-mixed}"
+custom_dict="${15:-None}"
 
 # Ensure output dirs 
 mkdir -p "$dest_dir"
@@ -56,6 +58,7 @@ echo "[RUN START] $(date) | TRAIN: $train_loc | VAL: $val_loc | DEST: $dest_dir 
 python IVIM_mapgenerator_synthetic_BH.py \
     --train_loc "$train_loc" \
     --val_loc "$val_loc" \
+    --GT_loc "$GT_loc" \
     --bval_path "$bval_path" \
     --dest_dir "$dest_dir" \
     --original_mode "$original_mode" \

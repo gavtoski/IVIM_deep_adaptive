@@ -106,7 +106,7 @@ def constraint_prior_func(tissue_type="mixed", model_type="3C", custom_dict=None
 	if custom_dict is not None:
 		return custom_dict
 
-	if tissue_type == "mixed":
+	if tissue_type in ["mixed","original","S1"]:
 		if model_type == "2C":
 			prior = {
 				"Dpar": expand_range((0.0004, 0.0020)),
@@ -380,12 +380,12 @@ class Net(nn.Module):
 
 		elif phase == 2:
 			# Phase 2: Emphasize low-b for Dmv/Fmv
-			weights[bvalues <= 100] = 1.05
+			weights[bvalues <= 100] = 1.00
 			weights[bvalues > 100] = 1.0
 
 		elif phase == 3:
 			# Phase 3: Emphasize mid-to-high b for Dpar
-			weights[bvalues > 100] = 1.05
+			weights[bvalues > 100] = 1.00 
 			weights[bvalues <= 100] = 1.0
 
 		elif phase == 4:
@@ -923,14 +923,14 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 		print(f"[INIT] Using {'3C' if use_three_compartment else '2C'} IVIM model architecture")
 
 	# Inject noise into weights 
-	def perturb_model_initialization(model, std=0.03):
+	def perturb_model_initialization(model, std=0.05):
 		with torch.no_grad():
 			for param in model.parameters():
 				if param.requires_grad:
 					param.add_(torch.randn_like(param) * std)
 
 	print("[NOISE] Injecting noise into model weights")
-	perturb_model_initialization(net, std=0.03)
+	perturb_model_initialization(net, std=0.05)
 
 	# splitting data into learning and validation set; subsequently initialising the Dataloaders
 	split = int(np.floor(len(X_train) * arg.train_pars.split))
@@ -1007,11 +1007,11 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	# Pad scaling:
 	# Define schedule: (phase, pad_fraction)
 	if original_mode:
-		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.3}
+		padding_schedule = None
 	elif use_three_compartment:
-		padding_schedule = {1: 1, 2: 0.5, 3: 0.3}
+		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.3}
 	else:  # 2C adaptive
-		padding_schedule = {1: 1, 2: 0.5, 3: 0.3}
+		padding_schedule = {1: 0.5, 2: 0.3, 3: 0.3}
 
 	if use_three_compartment:
 		param_tags = {
@@ -1037,8 +1037,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	def freeze_encoder_by_phase(net, phase):
 		"""
 		Applies phase-specific soft freezing strategy to the IVIM model.
-		2C: encoder0 = Dmv, encoder1 = Dpar
-		3C: encoder0 = Dmv, encoder1 = Dpar, encoder2 = Fmv, encoder3 = Dint, encoder4 = Fint
+		Also injects Gaussian noise (10%) into encoder weights during early Phase 1. (optional)
 		"""
 		net.encoder_soft_weights = {}
 
@@ -1077,6 +1076,17 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 			for key, value in weights.items():
 				if key in name:
 					net.encoder_soft_weights[name] = value
+
+		# Inject Gaussian noise in encoder weights during first 3 epochs of Phase 1
+		#if phase == 1 and getattr(net, 'fine_tune_phase_epoch_counter', 0) <= 3:
+		#	print("Injecting Gaussian noise into encoders (10% scale).")
+		#	with torch.no_grad():
+		#		for name, param in net.named_parameters():
+		#			if "encoder" in name and param.requires_grad:
+		#				param_std = 0.05 * param.abs().mean().item()
+		#				noise = torch.normal(mean=0.0, std=param_std, size=param.shape, device=param.device)
+		#				param.add_(noise)
+
 
 
 	def set_fine_tune_phase(net, bvalues, phase, bval_range, device='cpu'):
@@ -1120,12 +1130,16 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 	#------------------------------------------------------
 	# NETWORKS TRAINING LOOPS: MULTIPLE PARALLEL NETWORKS
 	#------------------------------------------------------
-	max_epochs_by_phase = {1: 15, 2: 8, 3: 7}
+	if use_three_compartment:
+		max_epochs_by_phase = {1: 5, 2: 8, 3: 7}
+	else:
+		max_epochs_by_phase = {1: 5, 2: 8, 3: 7}
+
 	fine_tune_phase_epoch_counter = 0
 
 	if arg.sim.jobs > 1: #when training multiple network instances in parallel processes
 		## Train
-		for epoch in range(100):  
+		for epoch in range(50):  
 			if original_mode:
 				max_epochs_per_phase = 25  # Fixed large value or whatever makes sense for original_mode
 			else:
@@ -1291,6 +1305,7 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 					num_bad_epochs = 0  # reset so next phase starts clean
 					switch_phase = True
 
+				set_fine_tune_phase(net, bvalues, 1, (0, 1000), arg.train_pars.device)
 
 			# Handle the switch
 			if switch_phase:
@@ -1557,6 +1572,8 @@ def learn_IVIM(X_train, bvalues, arg, net=None, original_mode=False, weight_tuni
 					print(f"[PHASE {fine_tune_phase}] Reached max_epochs_per_phase={max_epochs_per_phase}. Forcing phase switch.")
 					num_bad_epochs = 0  # reset so next phase starts clean
 					switch_phase = True
+
+					set_fine_tune_phase(net, bvalues, 1, (0, 1000), arg.train_pars.device)
 
 			# Handle the switch
 			if switch_phase:
