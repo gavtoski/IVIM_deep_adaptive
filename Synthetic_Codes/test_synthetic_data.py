@@ -119,13 +119,20 @@ def plot_mean_sd_curves(signal_dict, mode, title_prefix="3C", use_color=None):
 		plt.plot(bvals, mean_sig, label=f"{tissue}", color=color, linewidth=2)
 		plt.fill_between(bvals, mean_sig - std_sig, mean_sig + std_sig, alpha=0.2, color=color)
 
-	plt.title(f"{title_prefix} IVIM Signal: {'Standard' if mode == 'std' else 'Inversion Recovery'} (n=1000)")
+	# === FIXED INDENTATION HERE ===
+	if mode == "std" or mode is None:
+		suffix = "Standard"
+	else:
+		suffix = "Inversion Recovery"
+	plt.title(f"{title_prefix} IVIM Signal: {suffix} (n=1000)")
+
 	plt.xlabel("b-value [s/mm²]")
 	plt.ylabel("Signal (a.u.)")
 	plt.grid(True)
 	plt.legend()
 	plt.tight_layout()
 	plt.show()
+
 
 def compute_avg_signals_with_std(signal_dict, mode=None):
 	avg_signals = {}
